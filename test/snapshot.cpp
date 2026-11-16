@@ -175,7 +175,10 @@ int main (int argc, char** argv)
     std::cout << "       resonances: " << resList << std::endl;
     check (found900 && found2500, "finds the planted 900 Hz and 2.5 kHz rings");
     check (a.nRes <= 6, "doesn't flag every riff harmonic as a resonance (" + juce::String (a.nRes) + " found)");
-    check (a.nTone == 0 && getP (proc, ServantProcessor::toneId ("g", 0)) == 0.0f, "no tone moves of its own: The Master decides the tone from the mix");
+    {
+        float mx = 0; for (int i = 0; i < svt::kTone; ++i) mx = std::max (mx, std::abs (getP (proc, ServantProcessor::toneId ("g", i))));
+        check (a.nTone == 0 && mx < 0.05f, juce::String::formatted ("no tone moves of its own: The Master decides the tone from the mix (%d moves, max %.3f dB)", a.nTone, mx));
+    }
     const auto& cl = proc.getCleanup();
     std::cout << "       clean-up: " << cl.why << std::endl;
     check (std::abs (getP (proc, "hpf") - cl.hpf) < 0.5f && std::abs (getP (proc, "lpf") - cl.lpf) < 1.0f && cl.hpf >= 70.0f && cl.hpf <= 160.0f
