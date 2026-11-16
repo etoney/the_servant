@@ -46,7 +46,7 @@ public:
     juce::Array<juce::Colour> colours;
 };
 
-// The curve: the track, the genre target, the result, the tone-EQ nodes (drag them) and the
+// The curve: the track, the profile target, the result, the tone-EQ nodes (drag them) and the
 // resonances (click to mute one)
 class CurveDisplay : public juce::Component, public juce::SettableTooltipClient
 {
@@ -96,7 +96,8 @@ private:
     void placeKnob (Knob&, juce::Rectangle<int>);
     void timerCallback() override;
     void buildBackdrop();
-    void refreshProfileBoxes();
+    void refreshProfileBox();
+    void promptNewProfile();
     void updateStatus();
 
     ServantProcessor& proc;
@@ -105,7 +106,9 @@ private:
     Knob *amountKnob = nullptr, *hpfKnob = nullptr, *lpfKnob = nullptr, *depthKnob = nullptr, *sharpKnob = nullptr, *speedKnob = nullptr;
     Knob* toneKnobs[svt::kTone] {};
 
-    juce::ComboBox genreBox, sourceBox;
+    juce::ComboBox profileBox;
+    juce::TextButton newButton { "NEW" }, folderButton { "FOLDER" };
+    std::unique_ptr<juce::AlertWindow> nameDialog;
     AnalyzeButton analyzeButton;
     StatusScreen status;
     CurveDisplay curve;

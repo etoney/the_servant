@@ -39,13 +39,15 @@ public:
     svt::Params currentParams() const;
     svt::Engine& getEngine() { return engine; }
 
-    //---- profiles (message thread)
+    //---- profiles (message thread): built-in starter + a folder of songs per profile in Profiles/Parts
     const svt::ProfileLibrary& getLibrary() const { return library; }
-    void reloadProfiles();
-    juce::String getGenre() const  { return genre; }
-    juce::String getSource() const { return source; }
-    void selectProfile (const juce::String& genre, const juce::String& source);
-    const svt::Profile* currentProfile() const { return library.find (genre, source); }
+    void refreshProfiles();
+    void rescanProfilesNow();            // measure new songs right away (the folders are also watched in the background)
+    juce::String getProfileName() const { return profileName; }
+    void selectProfile (const juce::String& name);
+    const svt::Profile* currentProfile() const { auto* p = library.find (profileName); return p != nullptr && p->usable() ? p : nullptr; }
+    juce::String getMeasuring() const { return folders.getMeasuring(); }
+    bool createProfileFolder (const juce::String& name);   // makes Profiles/Parts/<name> and selects it
 
     //---- analysis (message thread)
     enum class Stage { idle, listening, done };
@@ -69,8 +71,13 @@ private:
     void setParam (const juce::String& id, float value);
 
     svt::Engine engine;
+    svt::ProfileFolders folders;
     svt::ProfileLibrary library;
-    juce::String genre { "Metal" }, source { "Rhythm Guitar" };
+    std::vector<svt::Profile> builtIns;
+    svt::Profile sessionProfile;          // the selected profile as saved in the session (used if its folder is gone)
+    bool hasSessionProfile = false;
+    juce::String profileName, appliedSignature;
+    int foldersVersionSeen = -1;
 
     std::vector<float> ltas, ltasEnv;   // what the analyzer heard (average power per FFT bin + its envelope)
     int ltasFrames = 0;

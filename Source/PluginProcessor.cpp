@@ -13,7 +13,17 @@ ServantProcessor::ServantProcessor()
                                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Servant", createLayout())
 {
-    reloadProfiles();
+    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+    {
+        int size = 0;
+        if (auto* data = BinaryData::getNamedResource (BinaryData::namedResourceList[i], size))
+        {
+            svt::Profile p;
+            if (svt::Profile::fromString (juce::String::fromUTF8 (data, size), p)) builtIns.push_back (p);
+        }
+    }
+    folders.start();
+    refreshProfiles();
     for (int i = 0; i < svt::kTone; ++i)
         for (auto* w : { "f", "g", "q" }) apvts.addParameterListener (toneId (w, i), this);
     apvts.addParameterListener ("hpf", this);
@@ -126,28 +136,60 @@ void ServantProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 }
 
 //==============================================================================
-void ServantProcessor::reloadProfiles()
+void ServantProcessor::refreshProfiles()
 {
-    juce::StringArray builtIn;
-    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+    foldersVersionSeen = folders.version.load();
+    auto found = folders.getProfiles();
+    library.set (builtIns, found);
+    // a session made elsewhere (or whose folder was removed) still has its profile
+    if (hasSessionProfile && library.find (sessionProfile.name) == nullptr)
     {
-        int size = 0;
-        if (auto* data = BinaryData::getNamedResource (BinaryData::namedResourceList[i], size))
-            builtIn.add (juce::String::fromUTF8 (data, size));
+        found.push_back (sessionProfile);
+        library.set (builtIns, found);
     }
-    library.load (builtIn);
-    if (library.find (genre, source) == nullptr && ! library.all().empty())
+    if (library.find (profileName) == nullptr && ! library.all().empty())
     {
-        genre = library.all().front().genre;
-        source = library.all().front().source;
+        // default: the first profile with songs in it, else the starter
+        profileName = library.all().front().name;
+        for (auto& p : library.all()) if (p.usable()) { profileName = p.name; break; }
     }
+    // the selected profile's songs changed: re-decide from what was already heard
+    if (auto* p = currentProfile())
+    {
+        if (p->signature != appliedSignature)
+        {
+            const bool first = appliedSignature.isEmpty() && ! p->builtIn;
+            appliedSignature = p->signature;
+            if (! first && ltasFrames > 0 && ! engine.analyzer.learning.load()) decideAndApply (true);
+        }
+    }
+    ++analysisVersion;
 }
 
-void ServantProcessor::selectProfile (const juce::String& g, const juce::String& s)
+void ServantProcessor::rescanProfilesNow()
 {
-    if (library.find (g, s) == nullptr) return;
-    genre = g; source = s;
-    if (ltasFrames > 0 && ! engine.analyzer.learning.load()) decideAndApply (true);   // re-decide from what was heard, no need to play again
+    folders.scanNow();
+    refreshProfiles();
+}
+
+bool ServantProcessor::createProfileFolder (const juce::String& rawName)
+{
+    const auto name = juce::File::createLegalFileName (rawName.trim());
+    if (name.isEmpty()) return false;
+    svt::ProfileFolders::ensureFolders();
+    auto dir = svt::ProfileFolders::partsFolder().getChildFile (name);
+    if (! dir.isDirectory() && ! dir.createDirectory()) return false;
+    rescanProfilesNow();
+    selectProfile (name);
+    return true;
+}
+
+void ServantProcessor::selectProfile (const juce::String& name)
+{
+    if (library.find (name) == nullptr) return;
+    profileName = name;
+    if (auto* p = currentProfile()) appliedSignature = p->signature;
+    if (ltasFrames > 0 && ! engine.analyzer.learning.load() && currentProfile() != nullptr) decideAndApply (true);   // re-decide from what was heard, no need to play again
     ++analysisVersion;
 }
 
@@ -234,6 +276,7 @@ void ServantProcessor::parameterChanged (const juce::String& id, float)
 void ServantProcessor::timerCallback()
 {
     if (finishRequested.exchange (false)) finishAnalysis();
+    if (folders.version.load() != foldersVersionSeen) refreshProfiles();
 }
 
 //==============================================================================
@@ -241,8 +284,8 @@ void ServantProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     juce::ValueTree s ("SERVANT");
-    s.setProperty ("genre", genre, nullptr);
-    s.setProperty ("source", source, nullptr);
+    s.setProperty ("profile", profileName, nullptr);
+    if (auto* p = currentProfile()) s.setProperty ("profileData", p->toSessionString(), nullptr);
     juce::String flags, res, mutes;
     for (auto& f : userSet) flags << (f.load() ? "1" : "0");
     for (int i = 0; i < nApplied; ++i)
@@ -281,8 +324,12 @@ void ServantProcessor::setStateInformation (const void* data, int sizeInBytes)
     applying = false;
     if (! s.isValid()) return;
 
-    const juce::String g = s.getProperty ("genre", genre), src = s.getProperty ("source", source);
-    if (library.find (g, src) != nullptr) { genre = g; source = src; }
+    const juce::String name = s.getProperty ("profile", profileName);
+    svt::Profile saved;
+    if (svt::Profile::fromSessionString (s.getProperty ("profileData", "").toString(), saved)) { sessionProfile = saved; hasSessionProfile = true; }
+    profileName = name;
+    refreshProfiles();
+    if (auto* p = currentProfile()) appliedSignature = p->signature;
     const juce::String flags = s.getProperty ("userSet", "");
     for (int i = 0; i < kNumFlags; ++i) userSet[(size_t) i] = flags.substring (i, i + 1) == "1";
 

@@ -1,7 +1,9 @@
 // Headless checks (run locally and in CI):
-//  1) profiles: the built-in profile loads, bad JSON is rejected
-//  2) analysis: on a boxy, ringing, distorted test riff it finds the planted resonances,
-//     cuts the boxy low-mids, and the result lands closer to the Metal / Rhythm Guitar target
+//  1) profiles: the built-in starter loads, bad JSON is rejected; a folder of songs becomes a
+//     profile (one song is enough), measurements are cached, adding a song refines it,
+//     empty folders are listed but can't be used, NEW makes a folder
+//  2) analysis: a profile made from a clean riff, then the same riff made boxy and ringing: it
+//     finds the planted resonances, cuts the boxy low-mids, and the result lands near the clean one
 //  3) DSP: transparent when everything is off, COMPARE = the dry track (latency aligned),
 //     MATCH holds the level, silence stays silent, AMOUNT scales the moves
 //  4) state: everything comes back after save / load, user overrides are remembered
@@ -38,10 +40,12 @@ using Gen = std::function<float (int64_t n, int ch)>;
 struct Riff
 {
     double sr;
+    bool dirty;
+    double pitch;
     svt::Biquad box, ring1, ring2, air;
     int64_t made = -1;
     float last[2] {};
-    explicit Riff (double rate) : sr (rate)
+    explicit Riff (double rate, bool boxyAndRinging = true, double transpose = 1.0) : sr (rate), dirty (boxyAndRinging), pitch (transpose)
     {
         box.peak (sr, 400, 0.8, 8.0);
         ring1.peak (sr, 900, 10.0, 9.0);
@@ -56,7 +60,7 @@ struct Riff
             static const double roots[] = { 82.41, 98.0, 110.0, 130.81, 146.83, 123.47, 92.5, 103.83 };
             const double t = (double) n / sr;
             const int note = (int) (t / 0.25) % 8;
-            const double f = roots[note], tn = std::fmod (t, 0.25);
+            const double f = roots[note] * pitch, tn = std::fmod (t, 0.25);
             auto saw = [] (double ph) { return 2.0 * (ph - std::floor (ph + 0.5)); };
             const double env = std::exp (-tn * 3.0) * 0.6 + 0.4;
             double x = 0.5 * saw (f * t) + 0.35 * saw (1.4983 * f * t) + 0.25 * saw (2.0 * f * t + 0.3);
@@ -66,13 +70,26 @@ struct Riff
             for (int c = 0; c < 2; ++c)
             {
                 float v = air.process ((float) x, c);
-                v = box.process (v, c); v = ring1.process (v, c); v = ring2.process (v, c);
+                if (dirty) { v = box.process (v, c); v = ring1.process (v, c); v = ring2.process (v, c); }
                 last[c] = 0.12f * v;
             }
         }
         return last[ch];
     }
 };
+
+static void writeWav (const juce::File& f, Riff riff, double seconds)
+{
+    f.getParentDirectory().createDirectory();
+    f.deleteFile();
+    juce::WavAudioFormat wav;
+    auto os = f.createOutputStream();
+    std::unique_ptr<juce::OutputStream> stream (os.release());
+    auto w = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}.withSampleRate (riff.sr).withNumChannels (2).withBitsPerSample (24));
+    juce::AudioBuffer<float> b (2, (int) (seconds * riff.sr));
+    for (int i = 0; i < b.getNumSamples(); ++i) for (int c = 0; c < 2; ++c) b.setSample (c, i, riff.sample (i, c));
+    w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+}
 
 struct Render { std::vector<float> l, r; };
 
@@ -130,11 +147,18 @@ int main (int argc, char** argv)
     outDir.createDirectory();
     const double sr = 48000.0;
 
+    // profiles live in a scratch folder for the test
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("servant-test-profiles");
+    root.deleteRecursively();
+    svt::ProfileFolders::rootOverride() = root;
+    const auto parts = root.getChildFile ("Parts");
+
     //==== 1) profiles
     {
         ServantProcessor p;
-        const auto* prof = p.getLibrary().find ("Metal", "Rhythm Guitar");
-        check (prof != nullptr, "built-in Metal / Rhythm Guitar profile loads");
+        const auto* prof = p.getLibrary().find ("Starter: Metal Rhythm Guitar");
+        check (prof != nullptr && prof->usable() && prof->builtIn, "built-in starter profile loads");
+        check (p.getProfileName() == "Starter: Metal Rhythm Guitar", "with no folders, the starter is selected");
         if (prof != nullptr)
         {
             double mean = 0; int n = 0;
@@ -144,22 +168,45 @@ int main (int argc, char** argv)
         }
         svt::Profile bad;
         check (! svt::Profile::fromString ("{\"format\":\"nope\"}", bad), "a non-profile JSON is rejected");
-        check (! svt::Profile::fromString ("{\"format\":\"castle-danger-profile\",\"genre\":\"X\",\"source\":\"Y\",\"curve\":[[100,0],[50,0]]}", bad),
+        check (! svt::Profile::fromString ("{\"format\":\"castle-danger-profile\",\"name\":\"X\",\"curve\":[[100,0],[50,0]]}", bad),
                "a profile with frequencies out of order is rejected");
+        check (parts.isDirectory() && root.getChildFile ("Mixes").isDirectory() && root.getChildFile ("READ ME.txt").existsAsFile(),
+               "first run makes Profiles/Parts, Profiles/Mixes and a READ ME");
     }
 
-    if (argc > 2)   // optional: a profile JSON written by tools/build_profile.py
+    ServantProcessor proc;
+    setP (proc, "match", 0);
     {
-        svt::Profile built;
-        const bool ok = svt::Profile::fromString (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]).loadFileAsString(), built);
-        check (ok, "profile from tools/build_profile.py loads (" + built.key() + ")");
+        writeWav (parts.getChildFile ("Clean Guitar").getChildFile ("song one.wav"), Riff (sr, false), 10.0);
+        root.getChildFile ("Parts").getChildFile ("Empty One").createDirectory();
+        proc.rescanProfilesNow();
+        const auto* cg = proc.getLibrary().find ("Clean Guitar");
+        check (cg != nullptr && cg->songs == 1 && cg->usable(), "a folder with one song becomes a profile");
+        check (cg != nullptr && cg->tol[30] == 2.5f, "one song: fixed +-2.5 dB allowance");
+        check (parts.getChildFile ("Clean Guitar").getChildFile (".castle-danger-cache.json").existsAsFile(), "measurements are cached in the folder");
+        const auto* em = proc.getLibrary().find ("Empty One");
+        check (em != nullptr && em->songs == 0 && ! em->usable(), "an empty folder is listed but can't be used yet");
+
+        // a different processor (another plugin instance) reads the cache instead of measuring again
+        ServantProcessor other;
+        other.rescanProfilesNow();
+        check (other.getLibrary().find ("Clean Guitar") != nullptr && other.getLibrary().find ("Clean Guitar")->songs == 1, "another instance sees the profile");
+
+        writeWav (parts.getChildFile ("Clean Guitar").getChildFile ("song two.wav"), Riff (sr, false, 1.12), 10.0);
+        proc.rescanProfilesNow();
+        cg = proc.getLibrary().find ("Clean Guitar");
+        check (cg != nullptr && cg->songs == 2, "dropping in another song refines the profile");
+
+        check (proc.createProfileFolder ("Sabbath / Rhythm") && ! proc.getProfileName().containsChar ('/')
+                   && parts.getChildFile (proc.getProfileName()).isDirectory() && proc.currentProfile() == nullptr,
+               "NEW makes a folder with a safe name and selects it (empty until songs arrive)");
+        proc.selectProfile ("Clean Guitar");
+        check (proc.getProfileName() == "Clean Guitar" && proc.currentProfile() != nullptr, "picking a profile");
     }
 
     //==== 2) analysis on the test riff
     Riff riff (sr);
     Gen riffGen = [&riff] (int64_t n, int c) { return riff.sample (n, c); };
-    ServantProcessor proc;
-    setP (proc, "match", 0);
     const auto before = render (proc, riffGen, 8.0, 0.0);
     const auto ltasBefore = ltasOf (before, sr);   // processed with nothing decided yet (just the default HPF)
 
@@ -192,13 +239,14 @@ int main (int argc, char** argv)
     std::cout << "       tone EQ: " << toneList << std::endl;
     std::cout << "       excess outside tolerance: " << a.excessBefore << " dB -> " << a.excessAfter << " dB" << std::endl;
     check (boxCut, "tone EQ cuts the boxy low-mids");
-    check (a.excessAfter < a.excessBefore * 0.5f, "tone EQ halves the error outside the profile's tolerance");
+    check (a.excessAfter < a.excessBefore * 0.65f, "tone EQ alone takes out over a third of the error (the rings are left to the suppressor)");
     bool knobsMatch = true;
     for (int i = 0; i < a.nTone; ++i)
         knobsMatch = knobsMatch && std::abs (getP (proc, ServantProcessor::toneId ("g", i)) - a.tone[i].g) < 0.02f
                                 && std::abs (getP (proc, ServantProcessor::toneId ("f", i)) / a.tone[i].f - 1.0f) < 0.01f;
     check (knobsMatch, "the decisions land on the knobs");
-    check (getP (proc, "lpf") == 12000.0f, "clean-up takes the profile's low-pass");
+    check (std::abs (getP (proc, "lpf") - proc.currentProfile()->lpf) < 1.0f && std::abs (getP (proc, "hpf") - proc.currentProfile()->hpf) < 0.5f,
+           "clean-up takes the profile's filters (" + juce::String (getP (proc, "hpf"), 0) + " Hz / " + juce::String (getP (proc, "lpf"), 0) + " Hz)");
     check (! proc.isUserSet (0), "decided knobs aren't marked as user-set");
 
     // process the riff with the decisions and measure the result
@@ -210,7 +258,7 @@ int main (int argc, char** argv)
     svt::bandCurve (ltasBefore, sr, cb); svt::bandCurve (ltasAfter, sr, ca);
     svt::excessCurve (cb, *prof, eb); svt::excessCurve (ca, *prof, ea);
     std::cout << "       processed riff, error vs profile: " << svt::rmsOf (eb) << " dB -> " << svt::rmsOf (ea) << " dB" << std::endl;
-    check (svt::rmsOf (ea) < svt::rmsOf (eb) * 0.6f, "processed audio is much closer to the genre target");
+    check (svt::rmsOf (ea) < svt::rmsOf (eb) * 0.6f, "processed audio is much closer to the profile");
     const float p25b = peakProminenceNear (ltasBefore, sr, 2500), p25a = peakProminenceNear (ltasAfter, sr, 2500);
     const float p9b = peakProminenceNear (ltasBefore, sr, 900), p9a = peakProminenceNear (ltasAfter, sr, 900);
     std::cout << "       2.5 kHz ring " << p25b << " -> " << p25a << " dB, 900 Hz ring " << p9b << " -> " << p9a << " dB" << std::endl;
@@ -287,6 +335,16 @@ int main (int argc, char** argv)
         check (n1 == n2 && q.getEngine().muted[0].load(), "resonances and mutes come back");
         check (q.getAnalysis().valid && q.isUserSet (0) && ! q.isUserSet (1), "the analysis and user overrides come back");
         check (std::abs (q.getAnalysis().excessBefore - a.excessBefore) < 0.01f, "the saved analysis matches");
+        check (q.getProfileName() == "Clean Guitar", "the profile choice comes back");
+
+        // the session still opens right if the profile's folder is gone
+        parts.getChildFile ("Clean Guitar").deleteRecursively();
+        ServantProcessor r;
+        r.rescanProfilesNow();
+        r.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (r.getProfileName() == "Clean Guitar" && r.currentProfile() != nullptr
+                   && std::abs (r.currentProfile()->target[30] - proc.currentProfile()->target[30]) < 0.01f,
+               "a session keeps its profile even if the folder is deleted");
     }
 
     //==== 5) GUI
@@ -306,6 +364,7 @@ int main (int argc, char** argv)
         delete ed;
     }
 
+    root.deleteRecursively();
     std::cout << "\n" << failures << " failure(s)" << std::endl;
     return failures == 0 ? 0 : 1;
 }

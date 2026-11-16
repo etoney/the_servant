@@ -3,7 +3,7 @@
 //
 //   Analyzer  listens to the whole track (long-term average spectrum, gated so silence and bleed
 //             don't count)
-//   decide()  compares it with a genre profile and picks the corrections:
+//   decide()  compares it with a profile and picks the corrections:
 //               - up to 12 resonances for the dynamic suppressor
 //               - up to 6 broad tone-EQ bands that move the track toward the target curve
 //   Engine    clean-up (HPF / LPF) -> resonance suppressor (5 ms lookahead) -> tone EQ -> MATCH
@@ -263,7 +263,7 @@ inline void bandCurve (const std::vector<float>& pow, double sr, float* out)
     normalise (out);
 }
 
-// The bands the tone EQ is allowed to care about, and how far outside the tolerance each one is
+// The bands the tone EQ is allowed to care about, and how much of each band's difference to correct
 template <typename ProfileT>
 inline void excessCurve (const float* curve, const ProfileT& p, float* ex)
 {
@@ -271,8 +271,11 @@ inline void excessCurve (const float* curve, const ProfileT& p, float* ex)
     {
         const float f = bandHz (k);
         const bool inUse = f >= p.hpf * 1.3f && f <= std::min (p.lpf / 1.3f, 14000.0f) && p.target[k] > -24.0f;
+        // soft knee: within half the tolerance it's left alone; past the full tolerance the whole
+        // difference counts (so a real problem gets corrected all the way, not just to the edge)
         const float e = curve[k] - p.target[k];
-        ex[k] = inUse ? (e > 0 ? 1.0f : -1.0f) * std::max (0.0f, std::abs (e) - p.tol[k]) : 0.0f;
+        const float w = juce::jlimit (0.0f, 1.0f, (std::abs (e) - 0.5f * p.tol[k]) / (0.5f * p.tol[k]));
+        ex[k] = inUse ? e * w : 0.0f;
     }
 }
 

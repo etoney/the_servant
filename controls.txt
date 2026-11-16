@@ -3,8 +3,9 @@
   Castle Danger Music Company
 ===============================================================================
 
-The Servant listens to one track, compares it with a genre profile, and sets
-the clean-up, resonance control and tone EQ to bring it in line. Everything it
+The Servant listens to one track, compares it with a profile you made from
+songs you like, and sets the clean-up, resonance control and tone EQ to bring
+it in line. Everything it
 decides is on the knobs, so you can override any of it.
 
 It's made for mixing: process a track, print it, then move The Servant to the
@@ -14,7 +15,7 @@ next track. Only one copy needs to run at a time.
 THE WORKFLOW
 -------------------------------------------------------------------------------
   1. Put The Servant on a track.
-  2. PROFILE (top right): pick the genre and what's on the track.
+  2. PROFILE (top right): pick a profile, or hit NEW to make one (see below).
   3. Hit ANALYZE and play the whole song from the start.
   4. Stop playback. The Servant finishes listening by itself and makes its
      decisions. (In the standalone app, or if your DAW doesn't report
@@ -24,20 +25,43 @@ THE WORKFLOW
      to a new track through a bus). Mute or hide the original.
   7. Move The Servant to the next track and repeat.
 
-Changing the genre or source after analyzing re-decides instantly from what
-was already heard. You don't need to play the song again.
+Changing the profile after analyzing (or adding songs to it) re-decides
+instantly from what was already heard. You don't need to play the song again.
 
 -------------------------------------------------------------------------------
-PROFILE
+PROFILES: A FOLDER OF SONGS
 -------------------------------------------------------------------------------
-  GENRE / SOURCE   The target sound. Version 0.1 ships one starter profile:
-                   Metal / Rhythm Guitar. More arrive as they are built from
-                   reference tracks.
+  A profile is the sound you want. You make it by giving The Servant songs
+  that sound the way you want this track to sound. One song is enough.
 
-  Profiles are JSON files shared with The Master. Your own go in:
+  NEW      Name it anything ("Sabbath Rhythm", "My Snare"). The Servant makes
+           a folder with that name and opens it.
+  FOLDER   Opens the selected profile's folder.
+
+  Drop songs into the folder (WAV, AIFF, FLAC, MP3, OGG). The Servant
+  measures each one by itself in the background (a few seconds a song) and
+  the profile is ready. Add more songs any time: with one song it allows
+  +/-2.5 dB either side of the target; with three or more it measures how
+  much your songs really vary and uses that.
+
+  USE ISOLATED PARTS. For a guitar profile, feed it just the guitar, not the
+  whole band, or The Servant will push your guitar toward the sound of the
+  whole mix. Get parts from multitracks, or split them out of a finished song
+  with a stem-separation tool (for example Ultimate Vocal Remover).
+
+  Where the folders are:
     macOS:   ~/Library/Application Support/Castle Danger/Profiles/
     Windows: %APPDATA%\Castle Danger\Profiles\
-  A file there with the same genre + source replaces the built-in one.
+      Parts\   profiles for The Servant (isolated parts)
+      Mixes\   profiles for The Master (finished, mixed songs)
+
+  Each song is measured once; the numbers are kept in a hidden file in the
+  folder (.castle-danger-cache.json). No audio is copied anywhere. Profiles
+  are saved inside your session too, so a project opens right even on another
+  computer or after the folder is gone.
+
+  "Starter: Metal Rhythm Guitar" is built in so you can try The Servant
+  before you've made a profile.
 
 -------------------------------------------------------------------------------
 ORDERS
@@ -54,7 +78,7 @@ ORDERS
 -------------------------------------------------------------------------------
 THE CURVE
 -------------------------------------------------------------------------------
-  Yellow band    the genre target and its tolerance (inside it, The Servant
+  Yellow band    the profile's target and its tolerance (inside it, The Servant
                  leaves the track alone)
   Grey line      your track as heard
   Red line       how it will come out
@@ -107,5 +131,4 @@ NOTES
   - Latency: 5 ms, reported to your DAW, so printed tracks stay in time.
   - The analysis is saved with your session, so reopening it doesn't mean
     analyzing again.
-  - Version 0.1 is a prototype: rhythm guitar in Metal. Bass, drums and
-    Punk come next, then vocals (with a de-esser) in version 2.
+  - Version 0.2 is a prototype. Vocals (with a de-esser) come in version 2.

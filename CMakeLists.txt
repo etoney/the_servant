@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SERVANT VERSION 0.1.0)
+project(SERVANT VERSION 0.2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,7 +19,7 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
-# The built-in genre profiles (same JSON format The Master reads)
+# The built-in starter profile (custom profiles are folders of songs, see Source/Profiles.h)
 juce_add_binary_data(ServantProfiles SOURCES
     profiles/metal-rhythm-guitar.json)
 
@@ -28,7 +28,7 @@ juce_add_plugin(Servant
     COMPANY_NAME "Castle Danger"
     PRODUCT_NAME "TheServant"
     PLUGIN_NAME "The Servant"
-    DESCRIPTION "Genre-matching track assistant"
+    DESCRIPTION "Sound-matching track assistant"
     BUNDLE_ID com.castledanger.servant
     PLUGIN_MANUFACTURER_CODE Cdgr
     PLUGIN_CODE Svt1
@@ -50,7 +50,8 @@ target_compile_definitions(Servant PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_USE_MP3AUDIOFORMAT=1)
 
 target_link_libraries(Servant
     PRIVATE
@@ -67,6 +68,6 @@ endif()
 juce_add_console_app(ServantSnapshot PRODUCT_NAME "ServantSnapshot")
 target_sources(ServantSnapshot PRIVATE test/snapshot.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
 target_compile_definitions(ServantSnapshot PRIVATE
-    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_USE_MP3AUDIOFORMAT=1
     "JucePlugin_VersionString=\"${PROJECT_VERSION}\"")
-target_link_libraries(ServantSnapshot PRIVATE ServantProfiles juce::juce_audio_processors juce::juce_gui_basics juce::juce_dsp PUBLIC juce::juce_recommended_config_flags)
+target_link_libraries(ServantSnapshot PRIVATE ServantProfiles juce::juce_audio_processors juce::juce_audio_formats juce::juce_gui_basics juce::juce_dsp PUBLIC juce::juce_recommended_config_flags)

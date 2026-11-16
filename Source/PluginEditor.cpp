@@ -501,6 +501,12 @@ void CurveDisplay::paint (juce::Graphics& g)
 
     juce::Graphics::ScopedSaveState ss (g);
     g.reduceClipRegion (p.toNearestInt().withTrimmedTop (-12));
+    if (auto* chosen = proc.getLibrary().find (proc.getProfileName()))
+    {
+        g.setColour (pal::hazard.withAlpha (0.8f)); g.setFont (ledFont (10.5f));
+        g.drawText ("PROFILE: " + chosen->name.toUpperCase() + (chosen->builtIn ? "" : "  //  " + juce::String (chosen->songs) + (chosen->songs == 1 ? " SONG" : " SONGS")),
+                    juce::Rectangle<float> (p.getX() + 2.0f, p.getY() - 12.0f, p.getWidth() * 0.5f, 11.0f), juce::Justification::centredLeft);
+    }
     const auto* prof = proc.currentProfile();
     const auto& a = proc.getAnalysis();
 
@@ -515,7 +521,7 @@ void CurveDisplay::paint (juce::Graphics& g)
         return path;
     };
 
-    // genre target: a band, the tolerance either side
+    // profile target: a band, the tolerance either side
     if (prof != nullptr)
     {
         juce::Path band;
@@ -607,6 +613,7 @@ void CurveDisplay::paint (juce::Graphics& g)
     // legend
     g.setFont (ledFont (9.5f));
     auto lg = juce::Rectangle<float> (p.getRight() - 290, p.getBottom() - 16, 290, 13);
+    g.setColour (pal::screen.withAlpha (0.85f)); g.fillRoundedRectangle (lg.expanded (6.0f, 3.0f), 3.0f);
     auto item = [&] (juce::Colour c, const juce::String& t, float w)
     {
         auto r = lg.removeFromLeft (w);
@@ -658,7 +665,7 @@ void CurveDisplay::mouseMove (const juce::MouseEvent& e)
         setTooltip ("Tone band " + juce::String (n + 1) + ": " + hzText (params.tone[n].f) + ", " + juce::String (params.tone[n].g, 1) + " dB, Q "
                     + juce::String (params.tone[n].q, 2) + ". Drag to move it, scroll to make it wider or narrower.");
     }
-    else setTooltip ("Yellow band: the genre target. Grey: your track. Red: how it will come out. Orange: what The Servant is doing. "
+    else setTooltip ("Yellow band: the profile's target. Grey: your track. Red: how it will come out. Orange: what The Servant is doing. "
                      "Drag the numbered dots to override a tone move; click a triangle up top to mute a resonance.");
     setMouseCursor (n >= 0 || r >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
@@ -719,9 +726,9 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     setLookAndFeel (&lnf);
 
     amountKnob = &makeKnob ("amount", "AMOUNT",
-        "How much of what The Servant decided you hear. 100% = exactly what the genre profile asks for. Above 100% pushes further, 0% = only the clean-up filters.", 21.0f);
+        "How much of what The Servant decided you hear. 100% = exactly what the profile asks for. Above 100% pushes further, 0% = only the clean-up filters.", 21.0f);
     amountKnob->slider.setName ("amount");
-    hpfKnob = &makeKnob ("hpf", "HIGH-PASS", "Cuts rumble below the source's useful range (24 dB/oct). Set from the genre profile when you analyze.");
+    hpfKnob = &makeKnob ("hpf", "HIGH-PASS", "Cuts rumble below the source's useful range (24 dB/oct). Set from the profile when you analyze.");
     lpfKnob = &makeKnob ("lpf", "LOW-PASS", "Rolls off fizz above the source's useful range (12 dB/oct). Turn fully right for OFF.");
     depthKnob = &makeKnob ("resDepth", "DEPTH", "How hard the resonances are pushed down when they ring. They're only cut while they ring, never all the time.");
     sharpKnob = &makeKnob ("resSharp", "SHARPNESS", "How narrow the resonance cuts are. Higher = surgical, lower = broader and smoother.");
@@ -741,7 +748,7 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     cleanOn.setTooltip ("High-pass and low-pass clean-up.");
     resOn.setTooltip ("The resonance suppressor: finds frequencies that ring and ducks only those, only while they ring.");
     resLock.setTooltip ("Keeps the current resonances when you analyze again or change the profile.");
-    toneOn.setTooltip ("Broad, gentle EQ moves toward the genre's target curve.");
+    toneOn.setTooltip ("Broad, gentle EQ moves toward the profile's target curve.");
     toneLock.setTooltip ("Keeps the current tone EQ (and clean-up) when you analyze again or change the profile.");
     auto attach = [this] (const char* id, juce::ToggleButton& b)
     { buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, id, b)); };
@@ -761,20 +768,27 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     addAndMakeVisible (bell);
     bell.setInterceptsMouseClicks (false, false);
 
-    for (auto* box : { &genreBox, &sourceBox }) { addAndMakeVisible (*box); box->setJustificationType (juce::Justification::centredLeft); }
-    genreBox.setTooltip ("Genre. The Servant shapes the track toward this genre's sound. Profiles are shared with The Master.");
-    sourceBox.setTooltip ("What's on this track.");
-    genreBox.onChange = [this]
+    addAndMakeVisible (profileBox);
+    profileBox.setJustificationType (juce::Justification::centredLeft);
+    profileBox.setTooltip ("The sound to shape this track toward. Every profile is a folder of songs you picked: hit NEW to make one, FOLDER to add songs.");
+    profileBox.onChange = [this]
     {
-        const auto g = genreBox.getText();
-        const auto sources = proc.getLibrary().sources (g);
-        if (sources.isEmpty()) return;
-        proc.selectProfile (g, sources.contains (proc.getSource()) ? proc.getSource() : sources[0]);
-        refreshProfileBoxes();
+        const int i = profileBox.getSelectedId() - 1;
+        const auto& all = proc.getLibrary().all();
+        if (i >= 0 && i < (int) all.size() && all[(size_t) i].name != proc.getProfileName()) proc.selectProfile (all[(size_t) i].name);
     };
-    sourceBox.onChange = [this] { proc.selectProfile (genreBox.getText(), sourceBox.getText()); };
+    for (auto* b : { &newButton, &folderButton }) addAndMakeVisible (*b);
+    newButton.setTooltip ("Make a new profile: name it, then drop songs into its folder. One song is enough; isolated parts work best (just the guitar, just the bass).");
+    folderButton.setTooltip ("Open this profile's folder to add or remove songs. The Servant measures new songs by itself.");
+    newButton.onClick = [this] { promptNewProfile(); };
+    folderButton.onClick = [this]
+    {
+        svt::ProfileFolders::ensureFolders();
+        auto dir = svt::ProfileFolders::partsFolder().getChildFile (proc.getProfileName());
+        (dir.isDirectory() ? dir : svt::ProfileFolders::partsFolder()).startAsProcess();
+    };
 
-    refreshProfileBoxes();
+    refreshProfileBox();
     setSize (1060, 700);
     updateStatus();
     startTimerHz (30);
@@ -822,8 +836,9 @@ void ServantEditor::resized()
     badgeArea = { 548, 14, 260, 86 };
     crestArea = { 556, 19, 76, 76 };
     profileArea = { 842, 14, 200, 86 };
-    genreBox.setBounds (842, 36, 200, 26);
-    sourceBox.setBounds (842, 68, 200, 26);
+    profileBox.setBounds (842, 36, 200, 26);
+    newButton.setBounds (842, 70, 96, 24);
+    folderButton.setBounds (946, 70, 96, 24);
     stripeArea = { 0, 110, getWidth(), 18 };
 
     plates.push_back ({ "ORDERS", { 16, 138, 300, 250 }, true });
@@ -859,24 +874,49 @@ void ServantEditor::resized()
     buildBackdrop();
 }
 
-void ServantEditor::refreshProfileBoxes()
+void ServantEditor::refreshProfileBox()
 {
-    const auto& lib = proc.getLibrary();
-    genreBox.clear (juce::dontSendNotification);
-    sourceBox.clear (juce::dontSendNotification);
-    const auto genres = lib.genres();
-    for (int i = 0; i < genres.size(); ++i) genreBox.addItem (genres[i], i + 1);
-    genreBox.setText (proc.getGenre(), juce::dontSendNotification);
-    const auto sources = lib.sources (proc.getGenre());
-    for (int i = 0; i < sources.size(); ++i) sourceBox.addItem (sources[i], i + 1);
-    sourceBox.setText (proc.getSource(), juce::dontSendNotification);
+    const auto& all = proc.getLibrary().all();
+    profileBox.clear (juce::dontSendNotification);
+    bool heading = false;
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        const auto& p = all[i];
+        if (p.builtIn && ! heading) { profileBox.addSeparator(); heading = true; }
+        const auto label = p.builtIn ? p.name
+                                     : p.name + (p.songs == 0 ? "  (empty)" : "  (" + juce::String (p.songs) + (p.songs == 1 ? " song)" : " songs)"));
+        profileBox.addItem (label, (int) i + 1);
+        if (p.name == proc.getProfileName()) profileBox.setSelectedId ((int) i + 1, juce::dontSendNotification);
+    }
+}
+
+void ServantEditor::promptNewProfile()
+{
+    nameDialog = std::make_unique<juce::AlertWindow> ("NEW PROFILE",
+        "Name it anything (\"Sabbath Rhythm\", \"My Snare\"). Then drop songs into its folder: isolated parts work best.", juce::MessageBoxIconType::NoIcon, this);
+    nameDialog->addTextEditor ("name", "", "Profile name");
+    nameDialog->addButton ("CREATE", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    nameDialog->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    nameDialog->setColour (juce::AlertWindow::backgroundColourId, juce::Colour (0xff1a1411));
+    nameDialog->setColour (juce::AlertWindow::textColourId, pal::paint);
+    nameDialog->setColour (juce::AlertWindow::outlineColourId, pal::rust);
+    nameDialog->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int result)
+    {
+        if (result == 1 && nameDialog != nullptr)
+        {
+            const auto name = nameDialog->getTextEditorContents ("name");
+            if (proc.createProfileFolder (name))
+                svt::ProfileFolders::partsFolder().getChildFile (proc.getProfileName()).startAsProcess();
+            refreshProfileBox();
+        }
+        nameDialog.reset();
+    }), false);
 }
 
 void ServantEditor::updateStatus()
 {
     const auto stage = proc.getStage();
     const auto& a = proc.getAnalysis();
-    const auto* prof = proc.currentProfile();
     juce::StringArray l; juce::Array<juce::Colour> c;
     auto add = [&] (const juce::String& s, juce::Colour col) { l.add (s); c.add (col); };
     auto mmss = [] (float s) { const int t = juce::roundToInt (s); return juce::String (t / 60) + ":" + juce::String (t % 60).paddedLeft ('0', 2); };
@@ -899,17 +939,24 @@ void ServantEditor::updateStatus()
         add (a.nTone == 0 ? "TONE: ALREADY IN RANGE"
                           : "TONE: " + juce::String (a.nTone) + " MOVES  (OFF BY " + juce::String (a.excessBefore, 1) + " > " + juce::String (a.excessAfter, 1) + " dB)", pal::paint);
         add (nRes == 0 ? "RESONANCES: NONE FOUND" : "RESONANCES: " + juce::String (nRes) + " FOUND", pal::paint);
-        if (prof != nullptr && prof->status == "starter") add ("STARTER PROFILE. NEXT: PRINT THE TRACK", pal::hazard);
-        else add ("NEXT: PRINT THE TRACK, MOVE ME ON", pal::hazard);
+        add ("NEXT: PRINT THE TRACK, MOVE ME ON", pal::hazard);
     }
     else
     {
         analyzeButton.setButtonText ("ANALYZE");
         analyzeButton.sub = "THEN PLAY THE WHOLE SONG";
         add ("AT YOUR SERVICE.", pal::signalHot);
-        add ("1. PICK GENRE + SOURCE (TOP RIGHT)", pal::paint);
+        add ("1. PICK A PROFILE (OR MAKE ONE: NEW)", pal::paint);
         add ("2. HIT ANALYZE, PLAY THE SONG", pal::paint);
         add ("3. STOP. THE SERVANT DOES THE REST", pal::paint);
+    }
+    // profile problems and background measuring take the last line
+    const auto measuring = proc.getMeasuring();
+    const auto* chosen = proc.getLibrary().find (proc.getProfileName());
+    if (measuring.isNotEmpty() && l.size() > 0) { l.set (l.size() - 1, "MEASURING " + measuring.toUpperCase()); c.set (c.size() - 1, pal::hazard); }
+    else if (chosen != nullptr && ! chosen->usable() && l.size() > 0)
+    {
+        l.set (l.size() - 1, "PROFILE IS EMPTY: HIT FOLDER, ADD SONGS"); c.set (c.size() - 1, pal::hazard);
     }
     analyzeButton.listening = stage == ServantProcessor::Stage::listening;
     if (l != status.lines) { status.lines = l; status.colours = c; status.repaint(); }
@@ -928,7 +975,7 @@ void ServantEditor::timerCallback()
     if (proc.analysisVersion.load() != lastVersion)
     {
         lastVersion = proc.analysisVersion.load();
-        refreshProfileBoxes();
+        refreshProfileBox();
     }
 
     // knobs the user has turned since the analysis go gold; tone knobs are named after their frequency
@@ -1131,7 +1178,7 @@ void ServantEditor::buildBackdrop()
     g.setOpacity (1.0f); g.drawImage (l2, juce::Rectangle<float> (tx, badge.getY() + 38.0f, tw, 20.0f));
     g.drawImage (l3, juce::Rectangle<float> (tx + 1.0f, badge.getY() + 60.0f, tw, 14.0f));
 
-    auto sub = tex::distressedText ("GENRE-MATCHING TRACK ASSISTANT  //  V" + juce::String (JucePlugin_VersionString),
+    auto sub = tex::distressedText ("SOUND-MATCHING TRACK ASSISTANT  //  V" + juce::String (JucePlugin_VersionString),
                                     400, 14, tex::plainBold (10.5f), pal::paintDim, juce::Justification::centredLeft, scale, 0.15f, 99, 0.14f);
     g.setOpacity (1.0f);
     g.drawImage (sub, juce::Rectangle<float> (116.0f, 86.0f, 400.0f, 14.0f));
