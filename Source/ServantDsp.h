@@ -1,0 +1,605 @@
+#pragma once
+// The Servant: analysis, decisions and the processing chain.
+//
+//   Analyzer  listens to the whole track (long-term average spectrum, gated so silence and bleed
+//             don't count)
+//   decide()  compares it with a genre profile and picks the corrections:
+//               - up to 12 resonances for the dynamic suppressor
+//               - up to 6 broad tone-EQ bands that move the track toward the target curve
+//   Engine    clean-up (HPF / LPF) -> resonance suppressor (5 ms lookahead) -> tone EQ -> MATCH
+#include <juce_core/juce_core.h>
+#include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_dsp/juce_dsp.h>
+#include <array>
+#include <atomic>
+#include <cmath>
+#include <complex>
+#include <vector>
+
+namespace svt
+{
+//==============================================================================
+// 1/6-octave analysis bands, 31.25 Hz .. 16 kHz
+constexpr int kBands = 55;
+constexpr int kTone = 6;
+constexpr int kMaxRes = 12;
+constexpr int kFftOrder = 13;
+constexpr int kFftSize = 1 << kFftOrder;
+constexpr int kHop = kFftSize / 2;
+
+inline float bandHz (int k) { return 1000.0f * std::pow (2.0f, (float) (k - 30) / 6.0f); }
+
+// curves are compared by shape, not level: shift so the 100 Hz - 8 kHz average is 0 dB
+inline void normalise (float* curve)
+{
+    double s = 0; int n = 0;
+    for (int k = 0; k < kBands; ++k)
+        if (bandHz (k) >= 99.0f && bandHz (k) <= 8100.0f) { s += curve[k]; ++n; }
+    const float m = (float) (s / std::max (1, n));
+    for (int k = 0; k < kBands; ++k) curve[k] -= m;
+}
+
+inline float toDb (double p) { return (float) (10.0 * std::log10 (std::max (p, 1e-20))); }
+
+//==============================================================================
+struct Biquad
+{
+    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+    float z1[2] {}, z2[2] {};
+
+    inline float process (float x, int ch) noexcept
+    {
+        const float y = b0 * x + z1[ch];
+        z1[ch] = b1 * x - a1 * y + z2[ch];
+        z2[ch] = b2 * x - a2 * y;
+        return y;
+    }
+    void reset() { z1[0] = z1[1] = z2[0] = z2[1] = 0; }
+    void set (double nb0, double nb1, double nb2, double na0, double na1, double na2)
+    {
+        b0 = (float) (nb0 / na0); b1 = (float) (nb1 / na0); b2 = (float) (nb2 / na0);
+        a1 = (float) (na1 / na0); a2 = (float) (na2 / na0);
+    }
+    void bypass() { b0 = 1; b1 = b2 = a1 = a2 = 0; }
+
+    // RBJ cookbook
+    void peak (double sr, double f, double q, double db)
+    {
+        f = juce::jlimit (10.0, sr * 0.45, f);
+        const double A = std::pow (10.0, db / 40.0), w = juce::MathConstants<double>::twoPi * f / sr;
+        const double al = std::sin (w) / (2.0 * q), c = std::cos (w);
+        set (1 + al * A, -2 * c, 1 - al * A, 1 + al / A, -2 * c, 1 - al / A);
+    }
+    void highpass (double sr, double f, double q)
+    {
+        f = juce::jlimit (10.0, sr * 0.45, f);
+        const double w = juce::MathConstants<double>::twoPi * f / sr, al = std::sin (w) / (2.0 * q), c = std::cos (w);
+        set ((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + al, -2 * c, 1 - al);
+    }
+    void lowpass (double sr, double f, double q)
+    {
+        f = juce::jlimit (10.0, sr * 0.45, f);
+        const double w = juce::MathConstants<double>::twoPi * f / sr, al = std::sin (w) / (2.0 * q), c = std::cos (w);
+        set ((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + al, -2 * c, 1 - al);
+    }
+    void bandpass (double sr, double f, double q)   // 0 dB at the centre
+    {
+        f = juce::jlimit (10.0, sr * 0.45, f);
+        const double w = juce::MathConstants<double>::twoPi * f / sr, al = std::sin (w) / (2.0 * q), c = std::cos (w);
+        set (al, 0, -al, 1 + al, -2 * c, 1 - al);
+    }
+
+    double magnitudeDb (double f, double sr) const
+    {
+        const double w = juce::MathConstants<double>::twoPi * f / sr;
+        const std::complex<double> z1c = std::polar (1.0, -w), z2c = std::polar (1.0, -2.0 * w);
+        const auto num = (double) b0 + (double) b1 * z1c + (double) b2 * z2c;
+        const auto den = 1.0 + (double) a1 * z1c + (double) a2 * z2c;
+        return 20.0 * std::log10 (std::max (1e-12, std::abs (num) / std::abs (den)));
+    }
+};
+
+//==============================================================================
+// Listens while the song plays. Audio thread pushes; the message thread reads the average.
+class Analyzer
+{
+public:
+    void prepare (double sampleRate)
+    {
+        sr = sampleRate;
+        fft = std::make_unique<juce::dsp::FFT> (kFftOrder);
+        window.resize (kFftSize);
+        for (int i = 0; i < kFftSize; ++i)
+            window[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) kFftSize);
+        fifo.assign (kFftSize, 0.0f);
+        work.assign (kFftSize * 2, 0.0f);
+        envW = std::max (2, (int) std::round (80.0 / (sr / kFftSize)));
+        mx.assign (kFftSize / 2 + 1, 0.0f);
+        cum.assign (kFftSize / 2 + 2, 0.0);
+        const juce::SpinLock::ScopedLockType sl (lock);
+        acc.assign (kFftSize / 2 + 1, 0.0);
+        accEnv.assign (kFftSize / 2 + 1, 0.0);
+        frames = 0; fill = 0;
+    }
+
+    void start()
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        std::fill (acc.begin(), acc.end(), 0.0);
+        std::fill (accEnv.begin(), accEnv.end(), 0.0);
+        frames = 0; fill = 0; heardSamples = 0;
+        learning = true;
+    }
+    void stop() { learning = false; }
+
+    // audio thread
+    void push (const float* l, const float* r, int n) noexcept
+    {
+        if (! learning.load() || fifo.empty()) return;
+        heardSamples += n;
+        for (int i = 0; i < n; ++i)
+        {
+            fifo[(size_t) fill++] = r != nullptr ? 0.5f * (l[i] + r[i]) : l[i];
+            if (fill == kFftSize)
+            {
+                frame();
+                std::memmove (fifo.data(), fifo.data() + kHop, sizeof (float) * (size_t) (kFftSize - kHop));
+                fill = kFftSize - kHop;
+            }
+        }
+    }
+
+    // message thread: average power per FFT bin over the frames that passed the gate, and the
+    // average of each frame's upper envelope (harmonic lines filled in, so only real resonances stick out)
+    int getAverage (std::vector<float>& out, std::vector<float>& outEnv) const
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        out.assign (acc.size(), 0.0f);
+        outEnv.assign (acc.size(), 0.0f);
+        if (frames == 0) return 0;
+        for (size_t i = 0; i < acc.size(); ++i) { out[i] = (float) (acc[i] / frames); outEnv[i] = (float) (accEnv[i] / frames); }
+        return frames;
+    }
+    float learnedSeconds() const { return (float) (frames.load() * kHop) / (float) sr; }
+    float heardSeconds() const   { return (float) heardSamples.load() / (float) sr; }
+    double getSampleRate() const { return sr; }
+
+    std::atomic<bool> learning { false };
+
+private:
+    void frame() noexcept
+    {
+        double e = 0;
+        for (int i = 0; i < kFftSize; ++i) e += (double) fifo[(size_t) i] * fifo[(size_t) i];
+        if (e / kFftSize < 3.2e-6) return;           // gate: quieter than -55 dBFS RMS doesn't count
+        for (int i = 0; i < kFftSize; ++i) work[(size_t) i] = fifo[(size_t) i] * window[(size_t) i];
+        std::fill (work.begin() + kFftSize, work.end(), 0.0f);
+        fft->performFrequencyOnlyForwardTransform (work.data(), true);
+        const int nb = kFftSize / 2 + 1;
+        for (int i = 0; i < nb; ++i) work[(size_t) i] *= work[(size_t) i];
+        // upper envelope: max over +-80 Hz, then averaged over +-80 Hz
+        for (int i = 0; i < nb; ++i)
+        {
+            float m = 0;
+            for (int j = std::max (0, i - envW); j <= std::min (nb - 1, i + envW); ++j) m = std::max (m, work[(size_t) j]);
+            mx[(size_t) i] = m;
+        }
+        cum[0] = 0;
+        for (int i = 0; i < nb; ++i) cum[(size_t) i + 1] = cum[(size_t) i] + mx[(size_t) i];
+        const juce::SpinLock::ScopedTryLockType tl (lock);
+        if (! tl.isLocked()) return;
+        for (int i = 0; i < nb; ++i)
+        {
+            const int lo = std::max (0, i - envW), hi = std::min (nb - 1, i + envW);
+            acc[(size_t) i] += (double) work[(size_t) i];
+            accEnv[(size_t) i] += (cum[(size_t) hi + 1] - cum[(size_t) lo]) / (hi - lo + 1);
+        }
+        ++frames;
+    }
+
+    double sr = 48000.0;
+    std::unique_ptr<juce::dsp::FFT> fft;
+    std::vector<float> window, fifo, work, mx;
+    std::vector<double> acc, accEnv, cum;
+    int fill = 0, envW = 14;
+    std::atomic<int> frames { 0 };
+    std::atomic<int64_t> heardSamples { 0 };
+    juce::SpinLock lock;
+};
+
+//==============================================================================
+struct ToneBand { float f = 1000, g = 0, q = 1; };
+// dRef = the narrow/broad detector ratio the track would show here with no resonance, measured
+// from its own smoothed spectrum, for each sharpness in kRefQ (interpolated in between)
+constexpr int kRefQs = 7;
+constexpr float kRefQ[kRefQs] = { 2.0f, 3.0f, 4.0f, 6.0f, 8.0f, 11.0f, 16.0f };
+struct ResBand
+{
+    float f = 1000, prom = 0;
+    float dRef[kRefQs] {};
+    float refFor (float q) const
+    {
+        if (q <= kRefQ[0]) return dRef[0];
+        for (int i = 1; i < kRefQs; ++i)
+            if (q <= kRefQ[i])
+            {
+                const float t = std::log (q / kRefQ[i - 1]) / std::log (kRefQ[i] / kRefQ[i - 1]);
+                return dRef[i - 1] + t * (dRef[i] - dRef[i - 1]);
+            }
+        return dRef[kRefQs - 1];
+    }
+};
+
+struct Analysis
+{
+    bool valid = false;
+    float seconds = 0;
+    float measured[kBands] {};          // the track's shape (normalised dB)
+    float excessBefore = 0, excessAfter = 0;   // RMS dB outside the profile's tolerance, before / after the tone EQ
+    int nTone = 0;
+    ToneBand tone[kTone];
+    int nRes = 0;
+    ResBand res[kMaxRes];
+};
+
+// Band energies of an averaged power spectrum (one value per FFT bin, bin i = i * sr / kFftSize)
+inline void bandCurve (const std::vector<float>& pow, double sr, float* out)
+{
+    const double binHz = sr / kFftSize;
+    const int nb = (int) pow.size();
+    for (int k = 0; k < kBands; ++k)
+    {
+        const double f = bandHz (k), lo = f * std::pow (2.0, -1.0 / 12.0), hi = f * std::pow (2.0, 1.0 / 12.0);
+        double s = 0; int c = 0;
+        for (int i = std::max (1, (int) std::ceil (lo / binHz)); i < nb && (double) i * binHz < hi; ++i) { s += pow[(size_t) i]; ++c; }
+        if (c == 0)   // band narrower than a bin: interpolate the density
+        {
+            const double x = f / binHz; const int i0 = juce::jlimit (1, nb - 2, (int) x);
+            const double t = juce::jlimit (0.0, 1.0, x - i0);
+            s = ((1 - t) * pow[(size_t) i0] + t * pow[(size_t) i0 + 1]) * (hi - lo) / binHz;
+        }
+        out[k] = toDb (s);
+    }
+    normalise (out);
+}
+
+// The bands the tone EQ is allowed to care about, and how far outside the tolerance each one is
+template <typename ProfileT>
+inline void excessCurve (const float* curve, const ProfileT& p, float* ex)
+{
+    for (int k = 0; k < kBands; ++k)
+    {
+        const float f = bandHz (k);
+        const bool inUse = f >= p.hpf * 1.3f && f <= std::min (p.lpf / 1.3f, 14000.0f) && p.target[k] > -24.0f;
+        const float e = curve[k] - p.target[k];
+        ex[k] = inUse ? (e > 0 ? 1.0f : -1.0f) * std::max (0.0f, std::abs (e) - p.tol[k]) : 0.0f;
+    }
+}
+
+inline float rmsOf (const float* x)
+{
+    double s = 0; for (int k = 0; k < kBands; ++k) s += (double) x[k] * x[k];
+    return (float) std::sqrt (s / kBands);
+}
+
+template <typename ProfileT>
+inline Analysis decide (const std::vector<float>& pow, const std::vector<float>& env, double sr, int frames, const ProfileT& p)
+{
+    Analysis a;
+    if (frames <= 0 || pow.size() < (size_t) (kFftSize / 2) || env.size() != pow.size()) return a;
+    a.valid = true;
+    a.seconds = (float) (frames * kHop) / (float) sr;
+    bandCurve (pow, sr, a.measured);
+
+    //---- tone EQ: greedy fit of broad peaking bands to the smoothed excess
+    float ex[kBands], r[kBands];
+    excessCurve (a.measured, p, ex);
+    a.excessBefore = rmsOf (ex);
+    for (int k = 0; k < kBands; ++k)   // ~1/2-octave smoothing: the tone EQ makes broad moves only
+    {
+        double s = 0, w = 0;
+        for (int j = -3; j <= 3; ++j)
+            if (k + j >= 0 && k + j < kBands) { const double wt = 4 - std::abs (j); s += wt * ex[k + j]; w += wt; }
+        r[k] = (float) (s / w);
+    }
+    for (int it = 0; it < kTone; ++it)
+    {
+        int km = 0;
+        for (int k = 1; k < kBands; ++k) if (std::abs (r[k]) > std::abs (r[km])) km = k;
+        if (std::abs (r[km]) < 1.0f) break;
+        // width of the lobe: neighbours with the same sign and at least half the peak
+        int lo = km, hi = km;
+        while (lo > 0 && r[lo - 1] * r[km] > 0 && std::abs (r[lo - 1]) >= 0.5f * std::abs (r[km])) --lo;
+        while (hi < kBands - 1 && r[hi + 1] * r[km] > 0 && std::abs (r[hi + 1]) >= 0.5f * std::abs (r[km])) ++hi;
+        const double oct = std::max (1.0 / 3.0, (double) (hi - lo + 1) / 6.0);
+        const double q = juce::jlimit (0.5, 3.0, std::sqrt (std::pow (2.0, oct)) / (std::pow (2.0, oct) - 1.0));
+        const float fc = std::sqrt (bandHz (lo) * bandHz (hi));
+        const float g = juce::jlimit (-p.maxCut, p.maxBoost, -r[km] * 0.9f);
+        if (std::abs (g) < 0.5f) break;
+        Biquad bq; bq.peak (sr, fc, q, g);
+        for (int k = 0; k < kBands; ++k) r[k] += (float) bq.magnitudeDb (bandHz (k), sr);
+        a.tone[a.nTone++] = { fc, g, (float) q };
+    }
+    std::sort (a.tone, a.tone + a.nTone, [] (const ToneBand& x, const ToneBand& y) { return x.f < y.f; });
+    {
+        float after[kBands];
+        for (int k = 0; k < kBands; ++k)
+        {
+            after[k] = a.measured[k];
+            for (int i = 0; i < a.nTone; ++i) { Biquad bq; bq.peak (sr, a.tone[i].f, a.tone[i].q, a.tone[i].g); after[k] += (float) bq.magnitudeDb (bandHz (k), sr); }
+        }
+        normalise (after);
+        float ex2[kBands]; excessCurve (after, p, ex2);
+        a.excessAfter = rmsOf (ex2);
+    }
+
+    //---- resonances: bumps standing out of the 1-octave-smoothed envelope spectrum
+    //     (the envelope fills in the riff's harmonic lines, so shared notes don't look like resonances)
+    const double binHz = sr / kFftSize;
+    const int nb = (int) env.size();
+    const int w = std::max (2, (int) std::round (80.0 / binHz));
+    std::vector<float> db ((size_t) nb), ref ((size_t) nb);
+    std::vector<double> refPow ((size_t) nb, 0.0);   // the real spectrum, 1-octave smoothed: what the detectors will see without the ring
+    {
+        std::vector<double> cum ((size_t) nb + 1, 0.0), cumP ((size_t) nb + 1, 0.0);
+        for (int i = 0; i < nb; ++i)
+        {
+            cum[(size_t) i + 1] = cum[(size_t) i] + env[(size_t) i];
+            cumP[(size_t) i + 1] = cumP[(size_t) i] + pow[(size_t) i];
+            db[(size_t) i] = toDb (env[(size_t) i]);
+        }
+        for (int i = 1; i < nb; ++i)
+        {
+            const double f = i * binHz;
+            const int lo = std::max (1, (int) (f * std::pow (2.0, -0.5) / binHz));
+            const int hi = std::min (nb - 1, std::max (lo + 1, (int) (f * std::pow (2.0, 0.5) / binHz)));
+            ref[(size_t) i] = toDb ((cum[(size_t) hi + 1] - cum[(size_t) lo]) / (hi - lo + 1));
+            // ...leaving out the middle third-octave, so the ring itself doesn't raise its own reference
+            const int clo = std::max (lo, (int) (f * std::pow (2.0, -1.0 / 6.0) / binHz)), chi = std::min (hi, (int) (f * std::pow (2.0, 1.0 / 6.0) / binHz));
+            const double outer = (cumP[(size_t) hi + 1] - cumP[(size_t) lo]) - (cumP[(size_t) chi + 1] - cumP[(size_t) clo]);
+            const int nOuter = (hi - lo + 1) - (chi - clo + 1);
+            refPow[(size_t) i] = nOuter > 0 ? outer / nOuter : (cumP[(size_t) hi + 1] - cumP[(size_t) lo]) / (hi - lo + 1);
+        }
+    }
+    std::vector<ResBand> cand;
+    const float fMax = std::min (8000.0f, p.lpf / 1.2f);
+    for (int i = std::max (w + 1, (int) (200.0 / binHz)); i < nb - w - 1 && (float) (i * binHz) < fMax; ++i)
+    {
+        const float prom = db[(size_t) i] - ref[(size_t) i];
+        if (prom < 0.6f * p.resTol) continue;   // the envelope smears narrow rings, so its threshold sits lower
+        bool isMax = true;
+        for (int j = -w; j <= w && isMax; ++j) if (j != 0 && db[(size_t) (i + j)] > db[(size_t) i]) isMax = false;
+        if (! isMax) continue;
+        const float y0 = db[(size_t) i - 1], y1 = db[(size_t) i], y2 = db[(size_t) i + 1];
+        const float den = y0 - 2 * y1 + y2;
+        const float d = std::abs (den) > 1e-6f ? juce::jlimit (-0.5f, 0.5f, 0.5f * (y0 - y2) / den) : 0.0f;
+        ResBand rb; rb.f = (float) ((i + d) * binHz); rb.prom = prom;
+        // detector reference from the smoothed spectrum (what this spot would look like without the ring)
+        for (int qi = 0; qi < kRefQs; ++qi)
+        {
+            Biquad nbq, bbq; nbq.bandpass (sr, rb.f, kRefQ[qi]); bbq.bandpass (sr, rb.f, 0.7);
+            double sn = 0, sb = 0;
+            const int j0 = std::max (1, (int) (rb.f / 16.0f / binHz)), j1 = std::min (nb - 1, (int) (rb.f * 4.0f / binHz));
+            for (int j = j0; j <= j1; ++j)
+            {
+                const double fj = j * binHz;
+                // detectors are two band-passes in series (steep skirts keep the low end out)
+                sn += refPow[(size_t) j] * std::pow (10.0, 2.0 * nbq.magnitudeDb (fj, sr) / 10.0);
+                sb += refPow[(size_t) j] * std::pow (10.0, 2.0 * bbq.magnitudeDb (fj, sr) / 10.0);
+            }
+            rb.dRef[qi] = toDb (sn / std::max (sb, 1e-30));
+        }
+        cand.push_back (rb);
+    }
+    std::sort (cand.begin(), cand.end(), [] (const ResBand& x, const ResBand& y) { return x.prom > y.prom; });
+    for (auto& c : cand)
+    {
+        bool clash = false;
+        for (int i = 0; i < a.nRes; ++i) if (std::abs (std::log2 (c.f / a.res[i].f)) < 0.25f) clash = true;
+        if (! clash && a.nRes < kMaxRes) a.res[a.nRes++] = c;
+    }
+    std::sort (a.res, a.res + a.nRes, [] (const ResBand& x, const ResBand& y) { return x.f < y.f; });
+    return a;
+}
+
+//==============================================================================
+struct Params
+{
+    float amount = 1.0f;
+    bool cleanOn = true;  float hpf = 80, lpf = 12000;
+    bool resOn = true;    float resDepth = 0.6f, resQ = 10.0f, resSpeed = 0.5f, resTol = 3.0f;
+    bool toneOn = true;   ToneBand tone[kTone];
+    bool match = true, compare = false;
+};
+
+class Engine
+{
+public:
+    Analyzer analyzer;
+
+    void prepare (double sampleRate, int maxBlock)
+    {
+        sr = sampleRate;
+        analyzer.prepare (sr);
+        look = juce::roundToInt (0.005 * sr);
+        dl.assign ((size_t) (look + 1) * 2, 0.0f);
+        dd.assign ((size_t) (look + 1) * 2, 0.0f);
+        dpos = 0;
+        for (auto* b : { &hp1, &hp2, &lp }) b->reset();
+        for (auto& b : tone) b.reset();
+        for (int i = 0; i < kMaxRes; ++i) { narrow[i].reset(); broad[i].reset(); cut[i].reset(); cut[i].bypass(); envN[i] = envB[i] = 1e-9f; grSm[i] = 0; }
+        inPow = outPow = 1e-6f; matchGain = 1.0f;
+        cached = {}; cachedValid = false; resVersionSeen = -1;
+        juce::ignoreUnused (maxBlock);
+    }
+    int getLatency() const { return look; }
+
+    // message thread: the resonances to work on
+    void setResonances (const ResBand* r, int n)
+    {
+        const juce::SpinLock::ScopedLockType sl (resLock);
+        nResPending = std::min (n, kMaxRes);
+        for (int i = 0; i < nResPending; ++i) resPending[i] = r[i];
+        ++resVersion;
+    }
+    std::array<std::atomic<bool>, kMaxRes> muted {};
+    std::array<std::atomic<float>, kMaxRes> grDb {};   // live gain reduction per resonance, for the display
+    std::atomic<float> inPeak { 0 }, outPeak { 0 }, matchDb { 0 };
+
+    void process (juce::AudioBuffer<float>& buf, const Params& p) noexcept
+    {
+        const int n = buf.getNumSamples(), nch = std::min (2, buf.getNumChannels());
+        if (n == 0 || nch == 0) return;
+        float* L = buf.getWritePointer (0);
+        float* R = nch > 1 ? buf.getWritePointer (1) : nullptr;
+        analyzer.push (L, R, n);
+        pickUpResonances();
+        updateStatic (p);
+
+        const float spd = juce::jlimit (0.0f, 1.0f, p.resSpeed);
+        const float atkMs = 20.0f * std::pow (0.05f, spd), relMs = 250.0f * std::pow (0.1f, spd);
+        const float aA = 1.0f - std::exp (-1.0f / (0.001f * atkMs * (float) sr));
+        const float aR = 1.0f - std::exp (-1.0f / (0.001f * relMs * (float) sr));
+        const float depth = p.resDepth * p.amount;
+        const float matchA = 1.0f - std::exp (-1.0f / (1.5f * (float) sr));
+        const float smA = 1.0f - std::exp (-1.0f / (0.05f * (float) sr));
+        float ip = 0, op = 0;
+
+        for (int s0 = 0; s0 < n; s0 += 16)
+        {
+            const int s1 = std::min (n, s0 + 16);
+            // detectors + suppressor coefficients for this little block
+            for (int s = s0; s < s1; ++s)
+            {
+                float x[2] = { L[s], R != nullptr ? R[s] : L[s] };
+                ip = std::max (ip, std::max (std::abs (x[0]), std::abs (x[1])));
+                const float dry0 = x[0], dry1 = x[1];
+                inPow += matchA * (0.5f * (dry0 * dry0 + dry1 * dry1) - inPow);
+                if (p.cleanOn)
+                    for (int c = 0; c < nch; ++c)
+                    {
+                        float v = x[c];
+                        if (hpfOn) v = hp2.process (hp1.process (v, c), c);
+                        if (lpfOn) v = lp.process (v, c);
+                        x[c] = v;
+                    }
+                const float det = nch > 1 ? 0.5f * (x[0] + x[1]) : x[0];
+                for (int i = 0; i < nRes; ++i)
+                {
+                    const float a = narrow[i].process (narrow[i].process (det, 0), 1), b = broad[i].process (broad[i].process (det, 0), 1);
+                    envN[i] += (a * a > envN[i] ? aA : aR) * (a * a - envN[i]);
+                    envB[i] += (b * b > envB[i] ? aA : aR) * (b * b - envB[i]);
+                }
+                // lookahead: the signal is processed 5 ms late, so the detectors see trouble coming
+                const size_t w = (size_t) dpos * 2;
+                dl[w] = x[0]; dl[w + 1] = x[1]; dd[w] = dry0; dd[w + 1] = dry1;
+                dpos = (dpos + 1) % (look + 1);
+                const size_t rd = (size_t) dpos * 2;
+                L[s] = dl[rd]; if (R != nullptr) R[s] = dl[rd + 1];
+                dryOut[0][s - s0] = dd[rd]; dryOut[1][s - s0] = dd[rd + 1];
+            }
+            for (int i = 0; i < nRes; ++i)
+            {
+                const float d = 10.0f * std::log10 ((envN[i] + 1e-12f) / (envB[i] + 1e-12f));
+                const float over = d - dRef[i] - 0.25f * p.resTol;
+                float gr = (p.resOn && ! muted[(size_t) i].load()) ? juce::jlimit (0.0f, 12.0f, 2.0f * depth * std::max (0.0f, over)) : 0.0f;
+                grSm[i] += 0.35f * (gr - grSm[i]);
+                grDb[(size_t) i].store (grSm[i]);
+                if (grSm[i] > 0.05f) cut[i].peak (sr, res[i].f, p.resQ, -grSm[i]); else cut[i].bypass();
+            }
+            // apply suppressor + tone EQ + match on the delayed audio
+            for (int s = s0; s < s1; ++s)
+            {
+                for (int c = 0; c < nch; ++c)
+                {
+                    float* ptr = c == 0 ? L : R;
+                    float v = ptr[s];
+                    for (int i = 0; i < nRes; ++i) if (grSm[i] > 0.05f) v = cut[i].process (v, c);
+                    if (p.toneOn) for (int i = 0; i < kTone; ++i) if (toneActive[i]) v = tone[i].process (v, c);
+                    ptr[s] = v;
+                }
+                const float l = L[s], r = R != nullptr ? R[s] : l;
+                outPow += matchA * (0.5f * (l * l + r * r) - outPow);
+                const float target = p.match && inPow > 1e-7f ? juce::jlimit (0.25f, 4.0f, std::sqrt (inPow / std::max (outPow, 1e-9f))) : 1.0f;
+                matchGain += smA * (target - matchGain);
+                if (p.compare)
+                {
+                    L[s] = dryOut[0][s - s0]; if (R != nullptr) R[s] = dryOut[1][s - s0];
+                }
+                else
+                {
+                    L[s] *= matchGain; if (R != nullptr) R[s] *= matchGain;
+                }
+                op = std::max (op, std::max (std::abs (L[s]), R != nullptr ? std::abs (R[s]) : 0.0f));
+            }
+        }
+        for (int c = 2; c < buf.getNumChannels(); ++c) buf.clear (c, 0, n);
+        inPeak.store (std::max (inPeak.load(), ip));
+        outPeak.store (std::max (outPeak.load(), op));
+        matchDb.store (20.0f * std::log10 (matchGain));
+    }
+
+private:
+    void pickUpResonances() noexcept
+    {
+        if (resVersion.load() == resVersionSeen) return;
+        const juce::SpinLock::ScopedTryLockType tl (resLock);
+        if (! tl.isLocked()) return;
+        resVersionSeen = resVersion.load();
+        nRes = nResPending;
+        for (int i = 0; i < nRes; ++i)
+        {
+            res[i] = resPending[i];
+            narrow[i].reset(); broad[i].reset(); cut[i].reset(); cut[i].bypass();
+            envN[i] = envB[i] = 1e-9f; grSm[i] = 0;
+        }
+        for (int i = nRes; i < kMaxRes; ++i) grDb[(size_t) i].store (0.0f);
+        cachedQ = -1;
+    }
+
+    void updateStatic (const Params& p) noexcept
+    {
+        if (cachedQ != p.resQ)
+        {
+            cachedQ = p.resQ;
+            for (int i = 0; i < nRes; ++i)
+            {
+                narrow[i].bandpass (sr, res[i].f, p.resQ); broad[i].bandpass (sr, res[i].f, 0.7);
+                dRef[i] = res[i].refFor (p.resQ);
+            }
+        }
+        const bool same = cachedValid && cached.hpf == p.hpf && cached.lpf == p.lpf && cached.amount == p.amount;
+        bool toneSame = same;
+        for (int i = 0; i < kTone && toneSame; ++i)
+            toneSame = cached.tone[i].f == p.tone[i].f && cached.tone[i].g == p.tone[i].g && cached.tone[i].q == p.tone[i].q;
+        if (toneSame) return;
+        cached = p; cachedValid = true;
+        hpfOn = p.hpf > 20.5f;
+        hp1.highpass (sr, p.hpf, 0.5412); hp2.highpass (sr, p.hpf, 1.3066);
+        lpfOn = p.lpf < 19900.0f;
+        lp.lowpass (sr, p.lpf, 0.7071);
+        for (int i = 0; i < kTone; ++i)
+        {
+            const float g = p.tone[i].g * p.amount;
+            toneActive[i] = std::abs (g) > 0.01f;
+            tone[i].peak (sr, p.tone[i].f, p.tone[i].q, g);
+        }
+    }
+
+    double sr = 48000.0;
+    int look = 240, dpos = 0;
+    std::vector<float> dl, dd;
+    float dryOut[2][16] {};
+    Biquad hp1, hp2, lp, tone[kTone], narrow[kMaxRes], broad[kMaxRes], cut[kMaxRes];
+    bool hpfOn = true, lpfOn = true, toneActive[kTone] {};
+    float envN[kMaxRes] {}, envB[kMaxRes] {}, grSm[kMaxRes] {}, dRef[kMaxRes] {};
+    float inPow = 1e-6f, outPow = 1e-6f, matchGain = 1.0f;
+    Params cached; bool cachedValid = false; float cachedQ = -1;
+
+    ResBand res[kMaxRes], resPending[kMaxRes];
+    int nRes = 0, nResPending = 0;
+    std::atomic<int> resVersion { 0 };
+    int resVersionSeen = -1;
+    juce::SpinLock resLock;
+};
+} // namespace svt

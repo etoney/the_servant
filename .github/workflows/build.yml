@@ -1,0 +1,82 @@
+name: Build The Servant
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfreetype6-dev libfontconfig1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxrender-dev libxext-dev
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSERVANT_TESTS_ONLY=ON
+      - name: Build checks
+        run: cmake --build build --config Release --target ServantSnapshot -j4
+      - name: Run analysis + DSP checks, render GUI
+        run: mkdir -p snapshots && ./build/ServantSnapshot_artefacts/Release/ServantSnapshot snapshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-snapshots
+          path: snapshots/*.png
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --target Servant_VST3 Servant_Standalone
+      - name: Build AU (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build build --config Release --target Servant_AU
+      - name: Package release zip (same layout as the site downloads)
+        shell: bash
+        run: |
+          VER=$(sed -n 's/^project(SERVANT VERSION \([0-9.]*\)).*/\1/p' CMakeLists.txt)
+          OS=$([ "$RUNNER_OS" = "macOS" ] && echo macOS || echo Windows)
+          ZIP="TheServant-v${VER}-${OS}.zip"
+          R=build/Servant_artefacts/Release
+          mkdir -p pkg/TheServant/VST3 pkg/TheServant/Standalone
+          cp readme.txt controls.txt LICENSE.txt THIRD-PARTY-NOTICES.txt pkg/TheServant/
+          cp -R "$R/VST3/TheServant.vst3" pkg/TheServant/VST3/
+          if [ "$OS" = "macOS" ]; then
+            mkdir -p pkg/TheServant/AU && cp -R "$R/AU/TheServant.component" pkg/TheServant/AU/
+            cp -R "$R/Standalone/TheServant.app" pkg/TheServant/Standalone/
+            (cd pkg && ditto -c -k --sequesterRsrc --keepParent TheServant "../$ZIP")
+          else
+            cp "$R/Standalone/TheServant.exe" pkg/TheServant/Standalone/
+            (cd pkg && 7z a -tzip -mx=9 "../$ZIP" TheServant > /dev/null)   # 7z writes forward-slash paths
+          fi
+          ls -la "$ZIP"
+          BR="downloads-$(echo $OS | tr 'A-Z' 'a-z')"
+          mkdir -p /tmp/dl && cp "$ZIP" /tmp/dl/ && cd /tmp/dl && git init -q -b "$BR" && git add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "$ZIP for ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" "$BR"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TheServant-${{ runner.os }}
+          path: |
+            readme.txt
+            controls.txt
+            LICENSE.txt
+            THIRD-PARTY-NOTICES.txt
+            build/Servant_artefacts/Release/VST3
+            build/Servant_artefacts/Release/AU
+            build/Servant_artefacts/Release/Standalone

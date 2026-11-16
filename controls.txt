@@ -1,0 +1,111 @@
+===============================================================================
+  THE SERVANT  //  CONTROLS QUICK REFERENCE
+  Castle Danger Music Company
+===============================================================================
+
+The Servant listens to one track, compares it with a genre profile, and sets
+the clean-up, resonance control and tone EQ to bring it in line. Everything it
+decides is on the knobs, so you can override any of it.
+
+It's made for mixing: process a track, print it, then move The Servant to the
+next track. Only one copy needs to run at a time.
+
+-------------------------------------------------------------------------------
+THE WORKFLOW
+-------------------------------------------------------------------------------
+  1. Put The Servant on a track.
+  2. PROFILE (top right): pick the genre and what's on the track.
+  3. Hit ANALYZE and play the whole song from the start.
+  4. Stop playback. The Servant finishes listening by itself and makes its
+     decisions. (In the standalone app, or if your DAW doesn't report
+     playback, hit FINISH.)
+  5. Listen. Use COMPARE to hear the untouched track. Adjust anything you like.
+  6. Print the track (Render in Place / Bounce in Place / Commit, or record it
+     to a new track through a bus). Mute or hide the original.
+  7. Move The Servant to the next track and repeat.
+
+Changing the genre or source after analyzing re-decides instantly from what
+was already heard. You don't need to play the song again.
+
+-------------------------------------------------------------------------------
+PROFILE
+-------------------------------------------------------------------------------
+  GENRE / SOURCE   The target sound. Version 0.1 ships one starter profile:
+                   Metal / Rhythm Guitar. More arrive as they are built from
+                   reference tracks.
+
+  Profiles are JSON files shared with The Master. Your own go in:
+    macOS:   ~/Library/Application Support/Castle Danger/Profiles/
+    Windows: %APPDATA%\Castle Danger\Profiles\
+  A file there with the same genre + source replaces the built-in one.
+
+-------------------------------------------------------------------------------
+ORDERS
+-------------------------------------------------------------------------------
+  ANALYZE      Starts listening. Silence and bleed quieter than -55 dBFS
+               don't count. While listening the button says FINISH.
+  RE-ANALYZE   Run it again after an edit or a new comp. Locked modules keep
+               their settings.
+  MATCH        Keeps the output at the same loudness as the input, so you
+               judge the sound, not the volume. Leave it on.
+  COMPARE      Plays the untouched track (same timing, same level). Turn it
+               off before you print!
+
+-------------------------------------------------------------------------------
+THE CURVE
+-------------------------------------------------------------------------------
+  Yellow band    the genre target and its tolerance (inside it, The Servant
+                 leaves the track alone)
+  Grey line      your track as heard
+  Red line       how it will come out
+  Orange line    what The Servant is doing (EQ + clean-up)
+  Numbered dots  the tone EQ bands. Drag to move one; scroll over it to make
+                 it wider or narrower.
+  Red triangles  resonances it found. The bar under each shows how much it is
+                 cutting right now. Click a triangle to mute it (leave that
+                 one alone); click again to bring it back.
+
+-------------------------------------------------------------------------------
+HOW HARD
+-------------------------------------------------------------------------------
+  AMOUNT       Scales every tone move and the resonance depth. 100% = what
+               the profile asks for. Above 100% pushes further (marked red).
+               0% = only the clean-up filters.
+
+-------------------------------------------------------------------------------
+CLEAN-UP
+-------------------------------------------------------------------------------
+  HIGH-PASS    Cuts rumble below the source's range (24 dB/oct).
+  LOW-PASS     Rolls off fizz above it (12 dB/oct). Fully right = OFF.
+  Both are set from the profile when you analyze.
+
+-------------------------------------------------------------------------------
+RESONANCE
+-------------------------------------------------------------------------------
+  Finds frequencies that ring (up to 12) and ducks only those, only while
+  they ring. A 5 ms look-ahead lets it catch them early.
+
+  DEPTH        How hard it pushes them down.
+  SHARPNESS    How narrow the cuts are (Q). Higher = more surgical.
+  SPEED        How fast the cuts react and let go.
+  LOCK         Keeps the current resonances when you analyze again.
+
+-------------------------------------------------------------------------------
+TONE EQ
+-------------------------------------------------------------------------------
+  Up to six broad, gentle bands (max +/-6 dB from the analysis) that move the
+  track toward the target curve. Each knob is labelled with its frequency.
+
+  LOCK         Keeps the tone EQ and clean-up when you analyze again.
+
+  Any knob you turn after an analysis turns GOLD, so you can see what you
+  changed and what The Servant decided.
+
+-------------------------------------------------------------------------------
+NOTES
+-------------------------------------------------------------------------------
+  - Latency: 5 ms, reported to your DAW, so printed tracks stay in time.
+  - The analysis is saved with your session, so reopening it doesn't mean
+    analyzing again.
+  - Version 0.1 is a prototype: rhythm guitar in Metal. Bass, drums and
+    Punk come next, then vocals (with a de-esser) in version 2.
