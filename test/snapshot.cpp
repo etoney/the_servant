@@ -8,8 +8,10 @@
 //     MATCH holds the level, silence stays silent, AMOUNT scales the moves
 //  4) state: everything comes back after save / load, user overrides are remembered
 //  5) renders the editor to PNGs
+#include <map>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../Source/PluginProcessor.h"
+#include "../Source/CDLink.h"
 #include "../Source/PluginEditor.h"
 
 static int failures = 0;
@@ -345,6 +347,79 @@ int main (int argc, char** argv)
         check (r.getProfileName() == "Clean Guitar" && r.currentProfile() != nullptr
                    && std::abs (r.currentProfile()->target[30] - proc.currentProfile()->target[30]) < 0.01f,
                "a session keeps its profile even if the folder is deleted");
+    }
+
+
+    //==== MIX LINK: compressor, trim after MATCH, band meter, The Master setting the track over the link
+    {
+        auto hit = [] (int64_t n, int ch)   // snare-ish hits every 250 ms, alternating loud and 12 dB softer, on a quiet bed
+        {
+            const double t = (double) (n % 12000) / 48000.0;
+            const double amp = (n / 12000) % 2 == 0 ? 1.0 : 0.25;
+            uint32_t h = (uint32_t) (n * 2 + ch) * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+            const float nz = (float) (h & 0xffff) / 32768.0f - 1.0f;
+            return (float) (amp * 0.6 * std::exp (-t * 30.0) * nz + 0.05 * std::sin (juce::MathConstants<double>::twoPi * 220.0 * (double) n / 48000.0));
+        };
+        // loud-hit vs soft-hit peak level: compression should bring them closer
+        ServantProcessor p;
+        const int lat = p.getLatencySamples() > 0 ? p.getLatencySamples() : 240;
+        auto spread = [lat] (const Render& r)
+        {
+            std::map<size_t, float> pk;   // rendering starts at sample 96256 (2 s, rounded up to a 512 block); the plugin delays by 'lat'
+            for (size_t i = 0; i < r.l.size(); ++i) { auto& v = pk[(i + 96256 - (size_t) lat) / 12000]; v = std::max (v, std::abs (r.l[i])); }
+            double a = 0, b = 0; int na = 0, nb = 0;
+            for (auto& [slot, v] : pk) { if (slot % 2 == 0) { a += 20.0 * std::log10 (v); ++na; } else { b += 20.0 * std::log10 (v); ++nb; } }
+            return (float) (a / std::max (1, na) - b / std::max (1, nb));
+        };
+        for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (p, id, 0);
+        const auto dry = render (p, hit, 6.0, 2.0);
+        setP (p, "compOn", 1); setP (p, "comp", 70);
+        const auto comp = render (p, hit, 6.0, 2.0);
+        check (spread (comp) < spread (dry) - 3.0f && spread (comp) > 0.5f, juce::String::formatted ("COMPRESSOR evens out loud and soft hits (%.1f -> %.1f dB apart)", spread (dry), spread (comp)));
+        setP (p, "compOn", 0); setP (p, "match", 1); setP (p, "trim", -6.0f);
+        const auto trimmed = render (p, hit, 6.0, 2.0);
+        check (std::abs ((rmsDb (trimmed.l) - rmsDb (dry.l)) + 6.0) < 0.5, juce::String::formatted ("TRIM -6 dB really lowers the track, even with MATCH on (%+.2f dB)", rmsDb (trimmed.l) - rmsDb (dry.l)));
+        setP (p, "trim", 0.0f);
+
+        // band meter: a 300 Hz tone lands in the 250-500 band
+        ServantProcessor q;
+        for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (q, id, 0);
+        render (q, [] (int64_t n, int) { return 0.3f * (float) std::sin (juce::MathConstants<double>::twoPi * 330.0 * (double) n / 48000.0); }, 3.0, 0.0);
+        auto& bm = q.getBandMeter();
+        int top = 0; for (int b = 1; b < 10; ++b) if (bm.out[(size_t) b].load() > bm.out[(size_t) top].load()) top = b;
+        check (top == 3 && bm.outSeconds.load() > 2.5, juce::String::formatted ("band meter: 330 Hz reads in the 250-500 Hz band (band %d, %.1f s)", top, bm.outSeconds.load()));
+
+        // over the link (The Master in "another plugin binary")
+        setP (q, "role", 1.0f);
+        auto other = cdlink::Node::createIsolatedForTesting();
+        juce::var lastStatus, lastApplied;
+        cdlink::Endpoint master ("master", [&] (const juce::var& m)
+        {
+            const auto t = m.getProperty ("type", "").toString();
+            if (t == "status" && m.getProperty ("from", "").toString() == q.getLink().getId()) lastStatus = m;
+            if (t == "applied" && m.getProperty ("from", "").toString() == q.getLink().getId()) lastApplied = m;
+        }, other);
+        auto pump = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+        for (int i = 0; i < 30 && ! master.isOnline(); ++i) pump (50);
+        pump (1600);
+        const auto ex = lastStatus.getProperty ("extra", {});
+        check (ex.getProperty ("role", "").toString() == "Rhythm" && ex.getProperty ("bandPow", {}).getArray() != nullptr
+               && ex.getProperty ("bandPow", {}).getArray()->size() == 10, "The Servant reports its role and its 10-band energy over the link");
+        auto set = cdlink::Endpoint::makeMessage ("set");
+        auto* prm = new juce::DynamicObject();
+        prm->setProperty ("toneOn", 1.0); prm->setProperty ("t1f", 355.0); prm->setProperty ("t1g", -2.5); prm->setProperty ("t1q", 1.4);
+        prm->setProperty ("compOn", 1.0); prm->setProperty ("comp", 35.0); prm->setProperty ("trim", -1.5);
+        set->setProperty ("params", juce::var (prm));
+        master.send (set, q.getLink().getId());
+        for (int i = 0; i < 40 && ! lastApplied.isObject(); ++i) pump (50);
+        check (std::abs (q.apvts.getRawParameterValue ("t1g")->load() + 2.5f) < 0.02f && std::abs (q.apvts.getRawParameterValue ("trim")->load() + 1.5f) < 0.02f
+               && q.apvts.getRawParameterValue ("compOn")->load() > 0.5f && lastApplied.isObject(), "The Master sets the track's tone band, compressor and trim");
+        check (! q.isUserSet (0), "The Master's settings aren't shown as your overrides");
+        auto reset = cdlink::Endpoint::makeMessage ("measure-reset");
+        master.send (reset);
+        pump (300);
+        render (q, [] (int64_t, int) { return 0.0f; }, 0.05, 0.0, 48000.0, false);
+        check (q.getBandMeter().outSeconds.load() < 0.5, "The Master can restart the track measurement (in step with its own analysis)");
     }
 
     //==== 5) GUI

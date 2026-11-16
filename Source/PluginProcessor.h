@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "ServantDsp.h"
 #include "Profiles.h"
+#include "CDLink.h"
 
 class ServantProcessor : public juce::AudioProcessor,
                          private juce::AudioProcessorValueTreeState::Listener,
@@ -64,7 +65,21 @@ public:
 
     static juce::String toneId (const char* what, int band) { return "t" + juce::String (band + 1) + what; }
 
+    // ---- Castle Danger Link: The Master hears the whole mix and can set this track's
+    //      tone EQ, compressor and trim; ROLE tells it what the track is for
+    static const juce::StringArray& roleNames();
+    juce::String getRoleName() const;
+    juce::String getTrackName() const { const juce::ScopedLock sl (nameLock); return trackName; }
+    void updateTrackProperties (const TrackProperties& props) override { const juce::ScopedLock sl (nameLock); trackName = props.name.value_or (juce::String()); }
+    using Link = cdlink::PluginLink<juce::AudioProcessorValueTreeState>;
+    Link& getLink() { return *link; }
+    svt::BandMeter& getBandMeter() { return bandMeter; }
+
 private:
+    std::unique_ptr<Link> link;
+    svt::BandMeter bandMeter;
+    juce::String trackName;
+    juce::CriticalSection nameLock;
     void parameterChanged (const juce::String& id, float) override;
     void timerCallback() override;
     void decideAndApply (bool applyToKnobs);

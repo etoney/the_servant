@@ -132,3 +132,34 @@ NOTES
   - The analysis is saved with your session, so reopening it doesn't mean
     analyzing again.
   - Version 0.2 is a prototype. Vocals (with a de-esser) come in version 2.
+
+
+-------------------------------------------------------------------------------
+MIX LINK  (with The Master)
+-------------------------------------------------------------------------------
+  The Servant can also work for the whole mix. Put The Master last on your
+  master bus and The Servant links to it by itself (Castle Danger Link:
+  automatic, offline, this computer only).
+
+  ROLE        What the track does: Lead, Rhythm, Bass, Kick, Snare, Drums,
+              Keys / Pads or Other. It's a label, not a profile. The Master
+              uses it to balance the mix: kick and bass own the low end, the
+              lead stays on top.
+  COMPRESSOR  ON + AMOUNT. The threshold follows the track's own level, and it
+              uses The Servant's 5 ms look-ahead, so hits are caught before
+              they arrive. The Master turns it on for the tracks that make the
+              mix's peaks.
+  TRIM        The track's level in the mix, applied AFTER MATCH, so it really
+              changes the balance. The Master sets it; move it any time.
+
+  How it works: each Servant tells The Master what its track sends to the mix
+  in 10 frequency bands. The Master compares the whole mix with the genre's
+  MIX profile and shares each fix out to the tracks that cause it: the track
+  that makes most of the mud gets most of the cut. On The Master's FIX IT page
+  (MY PLUGINS) press PRESCRIBE, check YOUR TRACKS, then APPLY. The Master sets
+  this track's tone EQ bands, compressor and trim, and explains each change.
+  Your own changes afterwards show gold as usual.
+
+  For this, The Servant has to be on all the tracks at the same time (not the
+  one-track-at-a-time print workflow). Once you're happy, you can still print
+  tracks to save CPU.

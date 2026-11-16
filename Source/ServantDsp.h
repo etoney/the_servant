@@ -406,6 +406,80 @@ inline Analysis decide (const std::vector<float>& pow, const std::vector<float>&
 }
 
 //==============================================================================
+// What the track sends to the mix, in The Master's 10 bands (20-60, 60-120, 120-250, 250-500,
+// 500-1k, 1-2k, 2-4k, 4-8k, 8-12k, 12-20k Hz): mean power per band since the last reset.
+// Reported over Castle Danger Link so The Master can tell which tracks make each part of the mix.
+class BandMeter
+{
+public:
+    static constexpr int kBands = 10;
+    void prepare (double sampleRate)
+    {
+        static const float edges[kBands + 1] = { 20, 60, 120, 250, 500, 1000, 2000, 4000, 8000, 12000, 20000 };
+        for (int b = 0; b < kBands; ++b)
+        {
+            hp[b].design (true, sampleRate, edges[b]);
+            lp[b].design (false, sampleRate, std::min ((double) edges[b + 1], sampleRate * 0.45));
+        }
+        if (sampleRate != preparedRate) resetRequested.store (true);   // hosts re-prepare often: keep what was measured
+        preparedRate = sampleRate;
+    }
+    void requestReset() { resetRequested.store (true); }
+
+    // audio thread (the processed, trimmed output)
+    void process (const float* L, const float* R, int n) noexcept
+    {
+        if (resetRequested.exchange (false))
+        {
+            for (auto& v : acc) v = 0;
+            total = 0; count = 0; peak = 0; active = 0;
+            for (int b = 0; b < kBands; ++b) { hp[b].reset(); lp[b].reset(); }
+        }
+        double blockPow = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const float x = 0.5f * (L[i] + (R != nullptr ? R[i] : L[i]));
+            for (int b = 0; b < kBands; ++b) { const double y = lp[b].process (hp[b].process (x)); acc[(size_t) b] += y * y; }
+            total += (double) x * x;
+            blockPow += (double) x * x;
+            peak = std::max (peak, std::abs (x));
+        }
+        count += n;
+        if (blockPow / std::max (1, n) > 1e-8) active += n;   // -80 dBFS: the part is playing
+        for (int b = 0; b < kBands; ++b) out[(size_t) b].store (count > 0 ? acc[(size_t) b] / (double) count : 0.0);
+        outTotal.store (count > 0 ? total / (double) count : 0.0);
+        outPeak.store (peak);
+        outSeconds.store ((double) active / std::max (1.0, sr));
+    }
+    void setRate (double r) { sr = r; }
+
+    // message thread
+    std::array<std::atomic<double>, kBands> out {};
+    std::atomic<double> outTotal { 0 }, outSeconds { 0 };
+    std::atomic<float> outPeak { 0 };
+
+private:
+    struct Bq
+    {
+        double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+        void design (bool high, double rate, double f)
+        {
+            const double w = juce::MathConstants<double>::twoPi * f / rate, c = std::cos (w), al = std::sin (w) / (2.0 * 0.7071), a0 = 1 + al;
+            if (high) { b0 = (1 + c) / 2 / a0; b1 = -(1 + c) / a0; b2 = (1 + c) / 2 / a0; }
+            else      { b0 = (1 - c) / 2 / a0; b1 = (1 - c) / a0;  b2 = (1 - c) / 2 / a0; }
+            a1 = -2 * c / a0; a2 = (1 - al) / a0;
+        }
+        void reset() { z1 = z2 = 0; }
+        inline double process (double x) { const double y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; }
+    };
+    std::array<Bq, kBands> hp, lp;
+    std::array<double, kBands> acc {};
+    double total = 0, sr = 48000.0, preparedRate = 0;
+    juce::int64 count = 0, active = 0;
+    float peak = 0;
+    std::atomic<bool> resetRequested { true };
+};
+
 struct Params
 {
     float amount = 1.0f;
@@ -413,6 +487,8 @@ struct Params
     bool resOn = true;    float resDepth = 0.6f, resQ = 10.0f, resSpeed = 0.5f, resTol = 3.0f;
     bool toneOn = true;   ToneBand tone[kTone];
     bool match = true, compare = false;
+    bool compOn = false; float comp = 0.0f;   // 0..1: program-dependent compressor (set by The Master, or by hand)
+    float trimDb = 0.0f;                      // output trim AFTER match, so it really changes the track's level in the mix
 };
 
 class Engine
@@ -432,6 +508,7 @@ public:
         for (auto& b : tone) b.reset();
         for (int i = 0; i < kMaxRes; ++i) { narrow[i].reset(); broad[i].reset(); cut[i].reset(); cut[i].bypass(); envN[i] = envB[i] = 1e-9f; grSm[i] = 0; }
         inPow = outPow = 1e-6f; matchGain = 1.0f;
+        compEnv = 0; compLvl = 1e-4f; compGr = 0; trimGain = 1.0f;
         cached = {}; cachedValid = false; resVersionSeen = -1;
         juce::ignoreUnused (maxBlock);
     }
@@ -466,6 +543,13 @@ public:
         const float depth = p.resDepth * p.amount;
         const float matchA = 1.0f - std::exp (-1.0f / (1.5f * (float) sr));
         const float smA = 1.0f - std::exp (-1.0f / (0.05f * (float) sr));
+        // compressor: threshold rides the track's own level (3 s), so COMP works the same on a quiet or a hot track
+        const float cAmt = p.compOn ? juce::jlimit (0.0f, 1.0f, p.comp) * std::min (1.0f, p.amount) : 0.0f;
+        const float cRatio = 1.5f + 2.5f * cAmt;
+        const float cEnvA = std::exp (-1.0f / (0.06f * (float) sr));    // peak hold decay
+        const float cAtk = 1.0f - std::exp (-1.0f / (0.0015f * (float) sr)), cRel = 1.0f - std::exp (-1.0f / (0.12f * (float) sr));
+        const float cLvlA = 1.0f - std::exp (-1.0f / (3.0f * (float) sr));
+        const float trimTarget = juce::Decibels::decibelsToGain (juce::jlimit (-24.0f, 12.0f, p.trimDb));
         float ip = 0, op = 0;
 
         for (int s0 = 0; s0 < n; s0 += 16)
@@ -478,6 +562,21 @@ public:
                 ip = std::max (ip, std::max (std::abs (x[0]), std::abs (x[1])));
                 const float dry0 = x[0], dry1 = x[1];
                 inPow += matchA * (0.5f * (dry0 * dry0 + dry1 * dry1) - inPow);
+                // compressor detector on the incoming audio: the audio itself comes out 5 ms later,
+                // so the gain is already down when a hit arrives (look-ahead, no transient overshoot)
+                if (cAmt > 0.0f || compGr > 0.01f)
+                {
+                    const float ms = 0.5f * (dry0 * dry0 + dry1 * dry1);
+                    const float pk = std::max (std::abs (dry0), std::abs (dry1));
+                    compEnv = std::max (pk * pk, compEnv * cEnvA);
+                    if (ms > 1e-8f) compLvl += cLvlA * (ms - compLvl);
+                    const float envDb = 10.0f * std::log10 (compEnv + 1e-12f);
+                    const float thr = 10.0f * std::log10 (compLvl + 1e-12f) + 10.0f - 10.0f * cAmt;
+                    const float want = cAmt > 0.0f ? std::max (0.0f, envDb - thr) * (1.0f - 1.0f / cRatio) : 0.0f;
+                    compGr += (want > compGr ? cAtk : cRel) * (want - compGr);
+                    compBuf[s - s0] = juce::Decibels::decibelsToGain (-compGr);
+                }
+                else compBuf[s - s0] = 1.0f;
                 if (p.cleanOn)
                     for (int c = 0; c < nch; ++c)
                     {
@@ -521,6 +620,7 @@ public:
                     if (p.toneOn) for (int i = 0; i < kTone; ++i) if (toneActive[i]) v = tone[i].process (v, c);
                     ptr[s] = v;
                 }
+                if (compBuf[s - s0] < 0.999f) { L[s] *= compBuf[s - s0]; if (R != nullptr) R[s] *= compBuf[s - s0]; }
                 const float l = L[s], r = R != nullptr ? R[s] : l;
                 outPow += matchA * (0.5f * (l * l + r * r) - outPow);
                 const float target = p.match && inPow > 1e-7f ? juce::jlimit (0.25f, 4.0f, std::sqrt (inPow / std::max (outPow, 1e-9f))) : 1.0f;
@@ -531,7 +631,8 @@ public:
                 }
                 else
                 {
-                    L[s] *= matchGain; if (R != nullptr) R[s] *= matchGain;
+                    trimGain += smA * (trimTarget - trimGain);
+                    L[s] *= matchGain * trimGain; if (R != nullptr) R[s] *= matchGain * trimGain;
                 }
                 op = std::max (op, std::max (std::abs (L[s]), R != nullptr ? std::abs (R[s]) : 0.0f));
             }
@@ -540,7 +641,9 @@ public:
         inPeak.store (std::max (inPeak.load(), ip));
         outPeak.store (std::max (outPeak.load(), op));
         matchDb.store (20.0f * std::log10 (matchGain));
+        compGrDb.store (std::max (compGrDb.load(), compGr));
     }
+    std::atomic<float> compGrDb { 0 };   // live compressor gain reduction (read + reset by the editor)
 
 private:
     void pickUpResonances() noexcept
@@ -597,6 +700,8 @@ private:
     bool hpfOn = true, lpfOn = true, toneActive[kTone] {};
     float envN[kMaxRes] {}, envB[kMaxRes] {}, grSm[kMaxRes] {}, dRef[kMaxRes] {};
     float inPow = 1e-6f, outPow = 1e-6f, matchGain = 1.0f;
+    float compEnv = 0, compLvl = 1e-4f, compGr = 0, trimGain = 1.0f;
+    float compBuf[16] {};
     Params cached; bool cachedValid = false; float cachedQ = -1;
 
     ResBand res[kMaxRes], resPending[kMaxRes];

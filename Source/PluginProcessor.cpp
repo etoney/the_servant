@@ -28,6 +28,29 @@ ServantProcessor::ServantProcessor()
         for (auto* w : { "f", "g", "q" }) apvts.addParameterListener (toneId (w, i), this);
     apvts.addParameterListener ("hpf", this);
     apvts.addParameterListener ("lpf", this);
+
+    juce::StringArray linkIds { "amount", "toneOn", "compOn", "comp", "trim", "role", "match" };
+    for (int i = 0; i < svt::kTone; ++i) for (auto* w : { "f", "g", "q" }) linkIds.add (toneId (w, i));
+    link = std::make_unique<Link> ("servant", "The Servant", JucePlugin_VersionString, apvts, linkIds);
+    link->onBeforeSet = [this] { applying = true; };          // The Master's settings aren't "your" overrides
+    link->onSetByMaster = [this] (const juce::StringArray&) { applying = false; ++analysisVersion; };
+    link->onOtherMessage = [this] (const juce::var& m)
+    {
+        if (m.getProperty ("type", "").toString() == "measure-reset") bandMeter.requestReset();
+    };
+    link->extraStatus = [this]
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("track", getTrackName());
+        o->setProperty ("role", getRoleName());
+        juce::Array<juce::var> b;
+        for (auto& v : bandMeter.out) b.add (v.load());
+        o->setProperty ("bandPow", b);
+        o->setProperty ("pow", bandMeter.outTotal.load());
+        o->setProperty ("peak", (double) bandMeter.outPeak.load());
+        o->setProperty ("seconds", bandMeter.outSeconds.load());
+        return juce::var (o);
+    };
     startTimerHz (10);
 }
 
@@ -79,6 +102,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayo
     }
 
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "match", 1 }, "Match (Level-Matched Output)", true));
+    // mix link (The Master sets these; you can too)
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "role", 1 }, "Role", roleNames(), 7));
+    p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "compOn", 1 }, "Compressor On", false));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "comp", 1 }, "Compressor", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, pctAttr));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "trim", 1 }, "Trim", NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f, dbAttr));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "compare", 1 }, "Compare (Hear the Dry Track)", false));
     return { p.begin(), p.end() };
 }
@@ -99,6 +127,9 @@ svt::Params ServantProcessor::currentParams() const
     for (int i = 0; i < svt::kTone; ++i) p.tone[i] = { v (toneId ("f", i)), v (toneId ("g", i)), v (toneId ("q", i)) };
     p.match = v ("match") > 0.5f;
     p.compare = v ("compare") > 0.5f;
+    p.compOn = v ("compOn") > 0.5f;
+    p.comp = v ("comp") * 0.01f;
+    p.trimDb = v ("trim");
     return p;
 }
 
@@ -111,6 +142,8 @@ bool ServantProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 void ServantProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    bandMeter.setRate (sampleRate);
+    bandMeter.prepare (sampleRate);
     // keep what was heard if the host re-prepares at the same rate (it does that often)
     engine.prepare (sampleRate, samplesPerBlock);
     engine.setResonances (applied, nApplied);
@@ -133,7 +166,25 @@ void ServantProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             }
     }
     engine.process (buffer, currentParams());
+    if (buffer.getNumChannels() > 0)
+    {
+        const float* L = buffer.getReadPointer (0);
+        const float* R = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr;
+        bandMeter.process (L, R, buffer.getNumSamples());
+        double pw = 0;
+        for (int i = 0; i < buffer.getNumSamples(); ++i) pw += 0.5 * ((double) L[i] * L[i] + (R ? (double) R[i] * R[i] : (double) L[i] * L[i]));
+        pw /= juce::jmax (1, buffer.getNumSamples());
+        link->env.addPowers (pw, pw, buffer.getNumSamples());   // a track: what matters is what it sends on
+    }
 }
+
+const juce::StringArray& ServantProcessor::roleNames()
+{
+    static const juce::StringArray r { "Lead", "Rhythm", "Bass", "Kick", "Snare", "Drums", "Keys / Pads", "Other" };
+    return r;
+}
+
+juce::String ServantProcessor::getRoleName() const { return roleNames()[(int) apvts.getRawParameterValue ("role")->load()]; }
 
 //==============================================================================
 void ServantProcessor::refreshProfiles()

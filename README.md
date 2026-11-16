@@ -8,6 +8,8 @@ Put it on a track, pick a profile, hit **ANALYZE** and play the song. When playb
 - **RESONANCE:** finds up to 12 frequencies that ring and ducks only those, only while they ring (dynamic, 5 ms look-ahead)
 - **TONE EQ:** up to six broad bands that move the track's shape toward the profile's target
 
+**MIX LINK (v0.3):** with The Master on the master bus, each Servant reports its track's 10-band energy over Castle Danger Link; The Master shares the mix's tone, compression and level fixes out to the tracks that cause them (ROLE, COMPRESSOR and TRIM controls; see `controls.txt`).
+
 Every decision lands on a knob you can override (it turns gold), with LOCK per module, AMOUNT (0-150 %), MATCH (level-matched output) and COMPARE (the dry track, latency aligned). It's built for mixing: process, print the track, move The Servant to the next one.
 
 **v0.2.0 prototype:** custom profiles made from your own songs, plus a built-in starter. See [the design spec](https://claude.ai/artifact/P89G9jVnUdQXUVgspNSJ4n) for the roadmap (vocals and the de-esser come in v2).

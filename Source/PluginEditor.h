@@ -103,6 +103,12 @@ private:
     ServantProcessor& proc;
     ServantLookAndFeel lnf;
     std::vector<std::unique_ptr<Knob>> knobs;
+    Knob *compKnob = nullptr, *trimKnob = nullptr;
+    juce::ComboBox roleBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
+    juce::ToggleButton compOn { "ON" };
+    juce::Label linkLabel;
+    int linkTick = 0;
     Knob *amountKnob = nullptr, *hpfKnob = nullptr, *lpfKnob = nullptr, *depthKnob = nullptr, *sharpKnob = nullptr, *speedKnob = nullptr;
     Knob* toneKnobs[svt::kTone] {};
 

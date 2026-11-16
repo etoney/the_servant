@@ -789,7 +789,25 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     };
 
     refreshProfileBox();
-    setSize (1060, 700);
+    // ---- MIX LINK (Castle Danger Link to The Master)
+    compKnob = &makeKnob ("comp", "AMOUNT", "Compressor amount. The threshold follows the track's own level, so it works the same on any track. The Master sets this when the track's peaks stick out of the mix.");
+    trimKnob = &makeKnob ("trim", "LEVEL", "The track's level in the mix, after MATCH (so it really changes the balance). The Master sets this to balance the mix; move it any time.");
+    compOn.setTooltip ("Compressor on/off.");
+    buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
+    addAndMakeVisible (compOn);
+    roleBox.addItemList (ServantProcessor::roleNames(), 1);
+    roleBox.setTooltip ("What this track does in the song. The Master uses it to balance the mix: the LEAD stays on top, KICK and BASS own the low end. Not a profile, just a label.");
+    roleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, "role", roleBox);
+    addAndMakeVisible (roleBox);
+    linkLabel.setFont (juce::Font (juce::FontOptions (12.5f)));
+    linkLabel.setColour (juce::Label::textColourId, pal::paint);
+    linkLabel.setJustificationType (juce::Justification::topLeft);
+    linkLabel.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (linkLabel);
+    linkLabel.setText ("Not linked. Put The Master last on your master bus: it hears the whole mix and can set this track's tone, compressor and trim (MY PLUGINS mode).", juce::dontSendNotification);
+    linkLabel.setColour (juce::Label::textColourId, pal::paintDim);
+
+    setSize (1060, 840);
     updateStatus();
     startTimerHz (30);
 }
@@ -870,6 +888,15 @@ void ServantEditor::resized()
     toneLock.setBounds (866, 424, 166, 30);
     for (int i = 0; i < svt::kTone; ++i)
         placeKnob (*toneKnobs[i], { 688 + (i % 3) * 116, 462 + (i / 3) * 112, 112, 108 });
+
+    plates.push_back ({ "MIX LINK  //  THE MASTER", { 16, 698, 520, 130 } });
+    roleBox.setBounds (100, 726, 200, 28);
+    linkLabel.setBounds (28, 762, 500, 58);
+    plates.push_back ({ "COMPRESSOR", { 546, 698, 250, 130 } });
+    compOn.setBounds (558, 728, 90, 30);
+    placeKnob (*compKnob, { 668, 712, 116, 110 });
+    plates.push_back ({ "TRIM", { 806, 698, 238, 130 } });
+    placeKnob (*trimKnob, { 866, 712, 120, 110 });
 
     buildBackdrop();
 }
@@ -964,6 +991,24 @@ void ServantEditor::updateStatus()
 
 void ServantEditor::timerCallback()
 {
+    if (++linkTick >= 15)
+    {
+        linkTick = 0;
+        auto& lk = proc.getLink();
+        const auto track = proc.getTrackName();
+        juce::String t;
+        if (! lk.masterNearby())
+            t = "Not linked. Put The Master last on your master bus: it hears the whole mix and can set this track's tone, compressor and trim (MY PLUGINS mode).";
+        else
+        {
+            t = "LINKED TO THE MASTER" + (track.isNotEmpty() ? "  //  track: " + track : juce::String());
+            const bool recent = lk.getLastNoteTime() > 0 && juce::Time::getMillisecondCounter() - lk.getLastNoteTime() < 60000;
+            t << "\n" << (recent ? "Just set by The Master: tone EQ, compressor and trim. Override anything; your changes show gold."
+                                  : "Set the ROLE, then use MY PLUGINS on The Master. It decides this track's tone, compression and level from the whole mix.");
+        }
+        linkLabel.setColour (juce::Label::textColourId, lk.masterNearby() ? pal::paint : pal::paintDim);
+        linkLabel.setText (t, juce::dontSendNotification);
+    }
     const bool listening = proc.getStage() == ServantProcessor::Stage::listening;
     phase += 0.12f;
     const float pulse = listening ? 0.5f + 0.5f * std::sin (phase) : 0.0f;
@@ -1126,6 +1171,13 @@ void ServantEditor::buildBackdrop()
     for (auto rr : { curve.getBounds(), status.getBounds() })
     {
         g.setColour (juce::Colours::black.withAlpha (0.7f)); g.fillRoundedRectangle (rr.toFloat().expanded (4.0f), 6.0f);
+    }
+    {   // MIX LINK: ROLE label
+        auto rl = tex::distressedText ("ROLE", 70, 18, tex::stencil (15.0f), pal::paint, juce::Justification::centredLeft, scale, 0.18f, 71, 0.12f);
+        g.setOpacity (1.0f);
+        g.drawImage (rl, juce::Rectangle<float> (30.0f, 731.0f, 70.0f, 18.0f));
+        auto tl = tex::distressedText ("AFTER MATCH", 80, 12, tex::plainBold (8.5f), pal::paintDim, juce::Justification::centredLeft, scale, 0.15f, 72, 0.12f);
+        g.drawImage (tl, juce::Rectangle<float> (818.0f, 724.0f, 80.0f, 12.0f));
     }
     {   // stamped hint under AMOUNT
         auto h1 = tex::distressedText ("100% = THE PROFILE.", 150, 14, tex::stencil (12.5f), pal::signalHot.withAlpha (0.9f), juce::Justification::centred, scale, 0.18f, 61, 0.14f);
