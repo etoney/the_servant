@@ -382,6 +382,64 @@ int main (int argc, char** argv)
         setP (q, "toneLock", 0.0f);
     }
 
+    //==== DE-ESSER: a "voice" (vowels + an "s" burst every second) and a distorted guitar
+    {
+        auto voice = [] (int64_t n, int)
+        {
+            const double t = (double) n / 48000.0, ph = std::fmod (t, 1.0);
+            double v = 0; for (int h = 1; h <= 12; ++h) v += std::sin (juce::MathConstants<double>::twoPi * 180.0 * h * t) / h;
+            v *= 0.12;
+            uint32_t z = (uint32_t) n * 2654435761u; z ^= z >> 15; z *= 2246822519u; z ^= z >> 13;
+            const double nz = (double) (z & 0xffff) / 32768.0 - 1.0;
+            static double hp1 = 0, prev = 0;   // crude high-pass for the "s" noise
+            hp1 = 0.25 * (hp1 + nz - prev); prev = nz;
+            const bool s = ph > 0.6 && ph < 0.72;
+            return (float) (s ? 0.02 * v + 0.35 * hp1 : v);
+        };
+        auto hiPow = [] (const Render& r, double from, double to, bool sOnly)
+        {
+            svt::Biquad hp; hp.highpass (48000.0, 6000.0, 0.7);
+            double e = 0; int c = 0;
+            for (size_t i = 0; i < r.l.size(); ++i)
+            {
+                const float y = hp.process (r.l[i], 0);
+                const double t = (double) i / 48000.0 + from, ph = std::fmod (t, 1.0);
+                const bool inS = ph > 0.62 && ph < 0.70, inV = ph > 0.1 && ph < 0.5;
+                if (t >= from && t < to && (sOnly ? inS : inV)) { e += (double) y * y; ++c; }
+            }
+            return 10.0 * std::log10 (e / std::max (1, c) + 1e-20);
+        };
+        ServantProcessor p;
+        for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (p, id, 0);
+        setP (p, "role", 0.0f);
+        const auto dry = render (p, voice, 8.0, 0.0);
+        float p50, p95, perMin, secs; p.getEngine().sib.read (p50, p95, perMin, secs);
+        std::cout << "       voice sibilance: p50 " << p50 << " p95 " << p95 << " dB, " << perMin << "/min over " << secs << " s" << std::endl;
+        check (p95 - p50 > 12.0f && perMin > 30.0f && perMin < 120.0f, "it measures how sibilant a voice is (the s sounds jump far above the vowels)");
+        setP (p, "deessOn", 1); setP (p, "deess", 60.0f); setP (p, "deessHz", 5500.0f);
+        const auto wet = render (p, voice, 8.0, 0.0);
+        const double sCut = hiPow (dry, 0, 8, true) - hiPow (wet, 0, 8, true), vCut = hiPow (dry, 0, 8, false) - hiPow (wet, 0, 8, false);
+        check (sCut > 4.0 && std::abs (vCut) < 1.0, juce::String::formatted ("the de-esser turns the s sounds down %.1f dB and leaves the vowels alone (%.2f dB)", sCut, vCut));
+        // low end untouched during an "s" (split band, not a whole-signal duck)
+        setP (p, "deessOn", 0);
+        auto lowPow = [] (const Render& r)
+        {
+            svt::Biquad lp, lp2; lp.lowpass (48000.0, 1500.0, 0.7071); lp2.lowpass (48000.0, 1500.0, 0.7071);
+            double e = 0; int c = 0;
+            for (size_t i = 0; i < r.l.size(); ++i) { const float y = lp2.process (lp.process (r.l[i], 0), 0); const double ph = std::fmod ((double) i / 48000.0, 1.0); if (ph > 0.62 && ph < 0.70) { e += (double) y * y; ++c; } }
+            return 10.0 * std::log10 (e / std::max (1, c) + 1e-20);
+        };
+        check (std::abs (lowPow (dry) - lowPow (wet)) < 1.0, juce::String::formatted ("only the top is turned down: below 1.5 kHz moves %.2f dB", lowPow (dry) - lowPow (wet)));
+
+        ServantProcessor g;
+        for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (g, id, 0);
+        Riff rf (48000.0, false); Gen gn = [&rf] (int64_t n, int c) { return rf.sample (n, c); };
+        render (g, gn, 8.0, 0.0);
+        g.getEngine().sib.read (p50, p95, perMin, secs);
+        std::cout << "       guitar sibilance: p50 " << p50 << " p95 " << p95 << " dB, " << perMin << "/min" << std::endl;
+        check (p95 - p50 < 8.0f || p95 < -9.0f, "a distorted guitar doesn't read as sibilant");
+    }
+
     //==== 5) GUI
     {
         auto* ed = proc.createEditor();

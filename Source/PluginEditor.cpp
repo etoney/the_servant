@@ -747,6 +747,16 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     // ---- MIX LINK (Castle Danger Link to The Master)
     compKnob = &makeKnob ("comp", "AMOUNT", "Compressor amount. The threshold follows the track's own level, so it works the same on any track. The Master sets this when the track's peaks stick out of the mix.");
     trimKnob = &makeKnob ("trim", "LEVEL", "The track's level in the mix, after MATCH (so it really changes the balance). The Master sets this to balance the mix; move it any time.");
+    deessKnob = &makeKnob ("deess", "AMOUNT", "How hard the de-esser turns down the \"s\" sounds. Only the top end is turned down, and only while an \"s\" is there. The Master sets this when the track is sibilant.");
+    deessHzKnob = &makeKnob ("deessHz", "FREQ", "Where the de-esser splits the sound: everything above it is turned down during an \"s\". Set from where this track's sibilance sits.");
+    deessOn.setTooltip ("De-esser on/off. The Master turns it on for sibilant tracks (usually the lead vocal).");
+    buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "deessOn", deessOn));
+    addAndMakeVisible (deessOn);
+    deessGr.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.0f, juce::Font::bold)));
+    deessGr.setColour (juce::Label::textColourId, pal::paintDim);
+    deessGr.setJustificationType (juce::Justification::centred);
+    deessGr.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (deessGr);
     compOn.setTooltip ("Compressor on/off.");
     buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
     addAndMakeVisible (compOn);
@@ -842,8 +852,13 @@ void ServantEditor::resized()
     for (int i = 0; i < svt::kTone; ++i)
         placeKnob (*toneKnobs[i], { 688 + (i % 3) * 116, 462 + (i / 3) * 112, 112, 108 });
 
-    plates.push_back ({ "MIX LINK  //  THE MASTER", { 16, 698, 520, 130 } });
-    linkLabel.setBounds (28, 726, 500, 94);
+    plates.push_back ({ "MIX LINK  //  THE MASTER", { 16, 698, 250, 130 } });
+    linkLabel.setBounds (28, 726, 228, 96);
+    plates.push_back ({ "DE-ESSER", { 276, 698, 260, 130 } });
+    deessOn.setBounds (288, 728, 70, 30);
+    deessGr.setBounds (288, 766, 70, 40);
+    placeKnob (*deessKnob, { 362, 712, 84, 110 });
+    placeKnob (*deessHzKnob, { 446, 712, 84, 110 });
     plates.push_back ({ "COMPRESSOR", { 546, 698, 250, 130 } });
     compOn.setBounds (558, 728, 90, 30);
     placeKnob (*compKnob, { 668, 712, 116, 110 });
@@ -943,6 +958,16 @@ void ServantEditor::timerCallback()
         if ((bool) k->slider.getProperties()["gold"] != gold) { k->slider.getProperties().set ("gold", gold); k->slider.repaint(); }
     }
     for (auto* k : { hpfKnob, lpfKnob }) k->slider.setEnabled (params.cleanOn);
+    for (auto* k : { deessKnob, deessHzKnob }) k->slider.setEnabled (params.deessOn);
+    {
+        const float gr = proc.getEngine().deGrDb.exchange (0.0f);
+        deessGrShown = std::max (gr, deessGrShown * 0.9f);
+        const auto t = ! params.deessOn ? juce::String ("OFF") : "-" + juce::String (deessGrShown, 1) + "\ndB";
+        if (deessGr.getText() != t) deessGr.setText (t, juce::dontSendNotification);
+        deessGr.setColour (juce::Label::textColourId, deessGrShown > 0.5f ? pal::signalHot : pal::paintDim);
+        const bool gold = proc.isUserSet (ServantProcessor::kDeessHzFlag);
+        if ((bool) deessHzKnob->slider.getProperties()["gold"] != gold) { deessHzKnob->slider.getProperties().set ("gold", gold); deessHzKnob->slider.repaint(); }
+    }
     for (auto* k : { depthKnob, sharpKnob, speedKnob }) k->slider.setEnabled (params.resOn);
     for (auto* k : toneKnobs) k->slider.setEnabled (params.toneOn);
     curve.repaint();

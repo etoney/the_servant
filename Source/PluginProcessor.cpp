@@ -14,9 +14,9 @@ ServantProcessor::ServantProcessor()
 {
     for (int i = 0; i < svt::kTone; ++i)
         for (auto* w : { "f", "g", "q" }) apvts.addParameterListener (toneId (w, i), this);
-    for (auto* id : { "hpf", "lpf", "role" }) apvts.addParameterListener (id, this);
+    for (auto* id : { "hpf", "lpf", "role", "deessHz" }) apvts.addParameterListener (id, this);
 
-    juce::StringArray linkIds { "amount", "toneOn", "compOn", "comp", "trim", "role", "match", "hpf", "lpf" };
+    juce::StringArray linkIds { "amount", "toneOn", "compOn", "comp", "trim", "role", "match", "hpf", "lpf", "deessOn", "deess", "deessHz" };
     for (int i = 0; i < svt::kTone; ++i) for (auto* w : { "f", "g", "q" }) linkIds.add (toneId (w, i));
     link = std::make_unique<Link> ("servant", "The Servant", JucePlugin_VersionString, apvts, linkIds);
     link->onBeforeSet = [this] { applying = true; };          // The Master's settings aren't "your" overrides
@@ -36,7 +36,7 @@ ServantProcessor::ServantProcessor()
     link->onOtherMessage = [this] (const juce::var& m)
     {
         const auto type = m.getProperty ("type", "").toString();
-        if (type == "measure-reset") { bandMeter.requestReset(); startAnalysis(); }      // The Master's RESET: listen again
+        if (type == "measure-reset") { bandMeter.requestReset(); engine.sib.resetRequested = true; startAnalysis(); }      // The Master's RESET: listen again
         else if (type == "analyze-finish")                                                // its PRESCRIBE: decide now
         {
             finishAnalysis();
@@ -55,6 +55,11 @@ ServantProcessor::ServantProcessor()
         o->setProperty ("pow", bandMeter.outTotal.load());
         o->setProperty ("peak", (double) bandMeter.outPeak.load());
         o->setProperty ("seconds", bandMeter.outSeconds.load());
+        float p50, p95, perMin, secs; engine.sib.read (p50, p95, perMin, secs);
+        auto* so = new juce::DynamicObject();
+        so->setProperty ("p50", p50); so->setProperty ("p95", p95); so->setProperty ("perMin", perMin); so->setProperty ("seconds", secs);
+        so->setProperty ("hz", apvts.getRawParameterValue ("deessHz")->load());
+        o->setProperty ("sib", juce::var (so));
         o->setProperty ("listening", getStage() == Stage::listening);
         o->setProperty ("finished", finishedSeq);
         int nRes = 0; getAppliedRes (nRes);
@@ -70,7 +75,7 @@ ServantProcessor::~ServantProcessor()
     stopTimer();
     for (int i = 0; i < svt::kTone; ++i)
         for (auto* w : { "f", "g", "q" }) apvts.removeParameterListener (toneId (w, i), this);
-    for (auto* id : { "hpf", "lpf", "role" }) apvts.removeParameterListener (id, this);
+    for (auto* id : { "hpf", "lpf", "role", "deessHz" }) apvts.removeParameterListener (id, this);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayout()
@@ -117,6 +122,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayo
     p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "compOn", 1 }, "Compressor On", false));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "comp", 1 }, "Compressor", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, pctAttr));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "trim", 1 }, "Trim", NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f, dbAttr));
+    p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "deessOn", 1 }, "De-Esser On", false));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "deess", 1 }, "De-Esser", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 40.0f, pctAttr));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "deessHz", 1 }, "De-Esser Frequency", skewed (3000.0f, 10000.0f, 6000.0f), 6500.0f, hzAttr));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "compare", 1 }, "Compare (Hear the Dry Track)", false));
     return { p.begin(), p.end() };
 }
@@ -140,6 +148,9 @@ svt::Params ServantProcessor::currentParams() const
     p.compOn = v ("compOn") > 0.5f;
     p.comp = v ("comp") * 0.01f;
     p.trimDb = v ("trim");
+    p.deessOn = v ("deessOn") > 0.5f;
+    p.deess = v ("deess") * 0.01f;
+    p.deessHz = v ("deessHz");
     return p;
 }
 
@@ -249,6 +260,14 @@ void ServantProcessor::decideAndApply (bool applyToKnobs)
     const bool locked = apvts.getRawParameterValue ("toneLock")->load() > 0.5f;
     if (! locked && ! userSet[kHpfFlag].load()) setParam ("hpf", cleanup.hpf);
     if (! locked && ! userSet[kLpfFlag].load()) setParam ("lpf", cleanup.lpf);
+    // the de-esser's split: just under where this track's "s" energy peaks (4.5 - 9.5 kHz)
+    if (! userSet[kDeessHzFlag].load())
+    {
+        int kBest = -1;
+        for (int k = 0; k < svt::kBands; ++k)
+            if (svt::bandHz (k) >= 4500.0f && svt::bandHz (k) <= 9500.0f && (kBest < 0 || measured[k] > measured[kBest])) kBest = k;
+        if (kBest >= 0) { deessHzDecided = juce::jlimit (3500.0f, 8000.0f, std::round (svt::bandHz (kBest) * 0.75f / 100.0f) * 100.0f); setParam ("deessHz", deessHzDecided); }
+    }
     if (apvts.getRawParameterValue ("resLock")->load() < 0.5f)
     {
         nApplied = analysis.nRes;
@@ -268,6 +287,7 @@ void ServantProcessor::parameterChanged (const juce::String& id, float)
     if (id == "role") { roleChanged = true; return; }   // re-decide the clean-up for the new role (timer)
     if (applying.load()) return;
     if (id == "hpf") userSet[kHpfFlag] = true;
+    else if (id == "deessHz") userSet[kDeessHzFlag] = true;
     else if (id == "lpf") userSet[kLpfFlag] = true;
     else if (id.startsWith ("t")) userSet[(size_t) juce::jlimit (0, svt::kTone - 1, id.substring (1, 2).getIntValue() - 1)] = true;
 }

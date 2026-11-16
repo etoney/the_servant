@@ -509,6 +509,30 @@ struct Params
     bool match = true, compare = false;
     bool compOn = false; float comp = 0.0f;   // 0..1: program-dependent compressor (set by The Master, or by hand)
     float trimDb = 0.0f;                      // output trim AFTER match, so it really changes the track's level in the mix
+    bool deessOn = false; float deess = 0.4f, deessHz = 6500.0f;   // split-band de-esser: amount 0..1, split frequency
+};
+
+// How sibilant the track is, for The Master: every 10 ms, how far the energy above the de-esser's
+// split stands out from the whole signal (dB). Vowels sit far below 0; an "s" comes up near 0.
+struct SibStats
+{
+    static constexpr int kBins = 100;   // -45 .. +5 dB in 0.5 dB steps
+    std::array<std::atomic<int>, kBins> hist {};
+    std::atomic<bool> resetRequested { false };
+    void add (float rDb) { ++hist[(size_t) juce::jlimit (0, kBins - 1, (int) ((rDb + 45.0f) * 2.0f))]; }
+    // message thread: { p50, p95, events per minute, seconds }
+    void read (float& p50, float& p95, float& perMin, float& seconds) const
+    {
+        int total = 0, events = 0;
+        for (int b = 0; b < kBins; ++b) { total += hist[(size_t) b].load(); if (b >= (int) ((-6.0f + 45.0f) * 2.0f)) events += hist[(size_t) b].load(); }
+        seconds = total * 0.01f;
+        p50 = p95 = -45.0f; perMin = 0.0f;
+        if (total == 0) return;
+        auto pct = [&] (double q) { int need = (int) std::ceil (q * total), acc = 0; for (int b = 0; b < kBins; ++b) { acc += hist[(size_t) b].load(); if (acc >= std::max (1, need)) return -45.0f + (b + 0.5f) * 0.5f; } return 5.0f; };
+        p50 = pct (0.5); p95 = pct (0.95);
+        // an "s" lasts ~100 ms = ~10 windows
+        perMin = seconds > 0 ? (events / 10.0f) / (seconds / 60.0f) : 0.0f;
+    }
 };
 
 class Engine
@@ -529,6 +553,7 @@ public:
         for (int i = 0; i < kMaxRes; ++i) { narrow[i].reset(); broad[i].reset(); cut[i].reset(); cut[i].bypass(); envN[i] = envB[i] = 1e-9f; grSm[i] = 0; }
         inPow = outPow = 1e-6f; matchGain = 1.0f;
         compEnv = 0; compLvl = 1e-4f; compGr = 0; trimGain = 1.0f;
+        deEnvS = deEnvF = 1e-9f; deGr = 0; deWinMax = -100; deWinN = 0; deWinAct = false; deHzCached = -1; deHp.reset(); deLp.reset(); deLp2.reset();
         cached = {}; cachedValid = false; resVersionSeen = -1;
         juce::ignoreUnused (maxBlock);
     }
@@ -545,6 +570,8 @@ public:
     std::array<std::atomic<bool>, kMaxRes> muted {};
     std::array<std::atomic<float>, kMaxRes> grDb {};   // live gain reduction per resonance, for the display
     std::atomic<float> inPeak { 0 }, outPeak { 0 }, matchDb { 0 };
+    SibStats sib;
+    std::atomic<float> deGrDb { 0 };   // live de-esser gain reduction (read + reset by the editor)
 
     void process (juce::AudioBuffer<float>& buf, const Params& p) noexcept
     {
@@ -570,6 +597,14 @@ public:
         const float cAtk = 1.0f - std::exp (-1.0f / (0.0015f * (float) sr)), cRel = 1.0f - std::exp (-1.0f / (0.12f * (float) sr));
         const float cLvlA = 1.0f - std::exp (-1.0f / (3.0f * (float) sr));
         const float trimTarget = juce::Decibels::decibelsToGain (juce::jlimit (-24.0f, 12.0f, p.trimDb));
+        // de-esser: the energy above the split vs the whole signal; an "s" pushes it up toward 0 dB
+        const float dAmt = p.deessOn ? juce::jlimit (0.0f, 1.0f, p.deess) * std::min (1.0f, p.amount) : 0.0f;
+        const float deThr = -6.0f - 10.0f * dAmt, deMax = 4.0f + 10.0f * dAmt;
+        const float deAtkS = 1.0f - std::exp (-1.0f / (0.0005f * (float) sr)), deRelS = 1.0f - std::exp (-1.0f / (0.04f * (float) sr));
+        const float deAtkF = 1.0f - std::exp (-1.0f / (0.005f * (float) sr)), deRelF = 1.0f - std::exp (-1.0f / (0.06f * (float) sr));
+        const float grAtk = 1.0f - std::exp (-1.0f / (0.001f * (float) sr)), grRel = 1.0f - std::exp (-1.0f / (0.05f * (float) sr));
+        const int deWin = std::max (1, (int) (0.01 * sr));
+        if (sib.resetRequested.exchange (false)) { for (auto& h : sib.hist) h = 0; deWinMax = -100; deWinN = 0; deWinAct = false; }
         float ip = 0, op = 0;
 
         for (int s0 = 0; s0 < n; s0 += 16)
@@ -606,6 +641,18 @@ public:
                         x[c] = v;
                     }
                 const float det = nch > 1 ? 0.5f * (x[0] + x[1]) : x[0];
+                {   // de-esser detector (always runs: it also measures how sibilant the track is)
+                    const float hs = deHp.process (det, 0), sp = hs * hs, fp = det * det;
+                    deEnvS += (sp > deEnvS ? deAtkS : deRelS) * (sp - deEnvS);
+                    deEnvF += (fp > deEnvF ? deAtkF : deRelF) * (fp - deEnvF);
+                    const bool active = deEnvF > 1e-7f;   // -70 dBFS: something is playing
+                    const float rDb = active ? 10.0f * std::log10 ((deEnvS + 1e-12f) / (deEnvF + 1e-12f)) : -100.0f;
+                    if (active) { deWinMax = std::max (deWinMax, rDb); deWinAct = true; }
+                    if (++deWinN >= deWin) { if (deWinAct) sib.add (deWinMax); deWinMax = -100; deWinN = 0; deWinAct = false; }
+                    const float want = dAmt > 0.0f && active ? juce::jlimit (0.0f, deMax, (rDb - deThr) * (0.5f + dAmt)) : 0.0f;
+                    deGr += (want > deGr ? grAtk : grRel) * (want - deGr);
+                    deBuf[s - s0] = juce::Decibels::decibelsToGain (-deGr);
+                }
                 for (int i = 0; i < nRes; ++i)
                 {
                     const float a = narrow[i].process (narrow[i].process (det, 0), 1), b = broad[i].process (broad[i].process (det, 0), 1);
@@ -638,6 +685,10 @@ public:
                     float v = ptr[s];
                     for (int i = 0; i < nRes; ++i) if (grSm[i] > 0.05f) v = cut[i].process (v, c);
                     if (p.toneOn) for (int i = 0; i < kTone; ++i) if (toneActive[i]) v = tone[i].process (v, c);
+                    {   // split at the de-esser frequency: low + high = the signal exactly; only the high part is turned down
+                        const float lo = deLp2.process (deLp.process (v, c), c);
+                        if (deBuf[s - s0] < 0.999f) v = lo + deBuf[s - s0] * (v - lo);
+                    }
                     ptr[s] = v;
                 }
                 if (compBuf[s - s0] < 0.999f) { L[s] *= compBuf[s - s0]; if (R != nullptr) R[s] *= compBuf[s - s0]; }
@@ -662,6 +713,7 @@ public:
         outPeak.store (std::max (outPeak.load(), op));
         matchDb.store (20.0f * std::log10 (matchGain));
         compGrDb.store (std::max (compGrDb.load(), compGr));
+        deGrDb.store (std::max (deGrDb.load(), deGr));
     }
     std::atomic<float> compGrDb { 0 };   // live compressor gain reduction (read + reset by the editor)
 
@@ -685,6 +737,12 @@ private:
 
     void updateStatic (const Params& p) noexcept
     {
+        if (p.deessHz != deHzCached)
+        {
+            deHzCached = p.deessHz;
+            deHp.highpass (sr, p.deessHz, 0.7071);
+            deLp.lowpass (sr, p.deessHz, 0.7071); deLp2.lowpass (sr, p.deessHz, 0.7071);   // 24 dB/oct split: the low end stays out of it
+        }
         if (cachedQ != p.resQ)
         {
             cachedQ = p.resQ;
@@ -716,7 +774,9 @@ private:
     int look = 240, dpos = 0;
     std::vector<float> dl, dd;
     float dryOut[2][16] {};
-    Biquad hp1, hp2, lp, tone[kTone], narrow[kMaxRes], broad[kMaxRes], cut[kMaxRes];
+    Biquad hp1, hp2, lp, tone[kTone], narrow[kMaxRes], broad[kMaxRes], cut[kMaxRes], deHp, deLp, deLp2;
+    float deEnvS = 1e-9f, deEnvF = 1e-9f, deGr = 0, deWinMax = -100, deHzCached = -1, deBuf[16] {};
+    int deWinN = 0; bool deWinAct = false;
     bool hpfOn = true, lpfOn = true, toneActive[kTone] {};
     float envN[kMaxRes] {}, envB[kMaxRes] {}, grSm[kMaxRes] {}, dRef[kMaxRes] {};
     float inPow = 1e-6f, outPow = 1e-6f, matchGain = 1.0f;

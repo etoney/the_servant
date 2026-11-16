@@ -39,8 +39,9 @@ WHO DECIDES WHAT
     LOW-PASS    for rhythm parts only: rolls off the fizz above where the
                 content ends (8-12 kHz). Other roles: OFF.
     RESONANCES  up to 12 frequencies that ring, ducked only while they ring.
+    DE-ESSER FREQ  just under where the track's "s" sounds sit.
   The Master (from the whole mix + genre):
-    TONE EQ, COMPRESSOR, TRIM.
+    TONE EQ, COMPRESSOR, TRIM, and DE-ESSER on/off + AMOUNT.
 
 -------------------------------------------------------------------------------
 ORDERS
@@ -79,6 +80,12 @@ THE KNOBS
   TONE EQ LOCK     keeps this track's tone EQ and clean-up exactly as they
                are: The Master won't change them (it still sets COMPRESSOR
                and TRIM).
+  DE-ESSER     ON + AMOUNT + FREQ. Turns down only the top end (above FREQ),
+               and only while an "s" or "t" sound is there; vowels and the
+               low end are left alone. The Servant measures how sibilant the
+               track is and sets FREQ just under where its "s" sounds sit;
+               The Master turns the de-esser on (usually on the lead vocal)
+               and sets AMOUNT. The readout shows how much it is cutting.
   COMPRESSOR   ON + AMOUNT. The threshold follows the track's own level and
                it uses the 5 ms look-ahead, so hits are caught early. The
                Master turns it on for the tracks that make the mix's peaks.

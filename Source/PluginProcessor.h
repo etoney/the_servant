@@ -52,7 +52,7 @@ public:
     std::atomic<int> analysisVersion { 0 };
 
     // knobs the user has moved since the last analysis show gold
-    enum { kHpfFlag = svt::kTone, kLpfFlag, kNumFlags };
+    enum { kHpfFlag = svt::kTone, kLpfFlag, kDeessHzFlag, kNumFlags };
     bool isUserSet (int i) const { return userSet[(size_t) i].load(); }
 
     static juce::String toneId (const char* what, int band) { return "t" + juce::String (band + 1) + what; }
@@ -75,6 +75,7 @@ private:
     void parameterChanged (const juce::String& id, float) override;
     svt::RoleProfile roleProfile() const;
     svt::Cleanup cleanup;
+    float deessHzDecided = 6500.0f;
     int finishedSeq = 0;
     std::atomic<bool> roleChanged { false };
     void timerCallback() override;
