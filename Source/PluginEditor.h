@@ -26,11 +26,12 @@ public:
     float glow = 0.0f;
 };
 
-// The big ANALYZE / FINISH plunger
+// The big order plate: what The Servant is doing for The Master (LISTENING / SERVED / WAITING).
+// Not a button any more: The Master starts and finishes the listening.
 class AnalyzeButton : public juce::Button
 {
 public:
-    AnalyzeButton() : juce::Button ("analyze") {}
+    AnalyzeButton() : juce::Button ("orders") { setInterceptsMouseClicks (false, false); }
     void paintButton (juce::Graphics&, bool hi, bool down) override;
     bool listening = false;
     float pulse = 0.0f;
@@ -46,7 +47,7 @@ public:
     juce::Array<juce::Colour> colours;
 };
 
-// The curve: the track, the profile target, the result, the tone-EQ nodes (drag them) and the
+// The curve: the track, the result, the tone-EQ nodes (drag them) and the
 // resonances (click to mute one)
 class CurveDisplay : public juce::Component, public juce::SettableTooltipClient
 {
@@ -96,8 +97,6 @@ private:
     void placeKnob (Knob&, juce::Rectangle<int>);
     void timerCallback() override;
     void buildBackdrop();
-    void refreshProfileBox();
-    void promptNewProfile();
     void updateStatus();
 
     ServantProcessor& proc;
@@ -112,9 +111,6 @@ private:
     Knob *amountKnob = nullptr, *hpfKnob = nullptr, *lpfKnob = nullptr, *depthKnob = nullptr, *sharpKnob = nullptr, *speedKnob = nullptr;
     Knob* toneKnobs[svt::kTone] {};
 
-    juce::ComboBox profileBox;
-    juce::TextButton newButton { "NEW" }, folderButton { "FOLDER" };
-    std::unique_ptr<juce::AlertWindow> nameDialog;
     AnalyzeButton analyzeButton;
     StatusScreen status;
     CurveDisplay curve;
@@ -125,7 +121,7 @@ private:
     juce::TooltipWindow tooltips { this, 700 };
 
     std::vector<Plate> plates;
-    juce::Rectangle<int> logoArea, badgeArea, crestArea, profileArea, stripeArea;
+    juce::Rectangle<int> logoArea, badgeArea, crestArea, roleArea, stripeArea;
     juce::Image backdrop, logoImage;
     int lastVersion = -1;
     float phase = 0.0f;

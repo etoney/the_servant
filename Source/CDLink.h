@@ -357,6 +357,8 @@ public:
     std::function<void (const juce::StringArray& changed)> onSetByMaster;
     std::function<void()> onBeforeSet;                        // e.g. so the plugin doesn't mark these as user overrides
     std::function<void (const juce::var& msg)> onOtherMessage; // anything that isn't hello / set
+    std::function<void (juce::DynamicObject& params)> filterSet; // drop what the plugin keeps locked
+    void sendStatusNow() { sendStatus ("*"); }                  // e.g. right after it finished something The Master waits for
 
     bool masterNearby() const { return lastMasterMs > 0 && juce::Time::getMillisecondCounter() - lastMasterMs < 3000; }
     juce::String getLastNote() const { return lastNote; }
@@ -386,7 +388,15 @@ private:
         else if (type == "set")
         {
             if (onBeforeSet) onBeforeSet();
-            const auto changed = applySet (apvts, m.getProperty ("params", {}));
+            auto params = m.getProperty ("params", {});
+            if (filterSet)
+                if (auto* o = params.getDynamicObject())
+                {
+                    auto copy = o->clone();
+                    filterSet (*copy);
+                    params = juce::var (copy.release());
+                }
+            const auto changed = applySet (apvts, params);
             lastNote = m.getProperty ("note", "").toString();
             lastNoteMs = juce::Time::getMillisecondCounter();
             if (onSetByMaster) onSetByMaster (changed);

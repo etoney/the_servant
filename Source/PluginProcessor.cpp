@@ -1,6 +1,5 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "BinaryData.h"
 
 #ifndef JucePlugin_VersionString
  #define JucePlugin_VersionString "dev"
@@ -13,30 +12,37 @@ ServantProcessor::ServantProcessor()
                                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Servant", createLayout())
 {
-    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
-    {
-        int size = 0;
-        if (auto* data = BinaryData::getNamedResource (BinaryData::namedResourceList[i], size))
-        {
-            svt::Profile p;
-            if (svt::Profile::fromString (juce::String::fromUTF8 (data, size), p)) builtIns.push_back (p);
-        }
-    }
-    folders.start();
-    refreshProfiles();
     for (int i = 0; i < svt::kTone; ++i)
         for (auto* w : { "f", "g", "q" }) apvts.addParameterListener (toneId (w, i), this);
-    apvts.addParameterListener ("hpf", this);
-    apvts.addParameterListener ("lpf", this);
+    for (auto* id : { "hpf", "lpf", "role" }) apvts.addParameterListener (id, this);
 
-    juce::StringArray linkIds { "amount", "toneOn", "compOn", "comp", "trim", "role", "match" };
+    juce::StringArray linkIds { "amount", "toneOn", "compOn", "comp", "trim", "role", "match", "hpf", "lpf" };
     for (int i = 0; i < svt::kTone; ++i) for (auto* w : { "f", "g", "q" }) linkIds.add (toneId (w, i));
     link = std::make_unique<Link> ("servant", "The Servant", JucePlugin_VersionString, apvts, linkIds);
     link->onBeforeSet = [this] { applying = true; };          // The Master's settings aren't "your" overrides
-    link->onSetByMaster = [this] (const juce::StringArray&) { applying = false; ++analysisVersion; };
+    link->onSetByMaster = [this] (const juce::StringArray& changed)
+    {
+        applying = false;
+        for (int i = 0; i < svt::kTone; ++i)                    // its tone moves are the new starting point
+            if (changed.contains (toneId ("g", i)) || changed.contains (toneId ("f", i))) userSet[(size_t) i] = false;
+        ++analysisVersion;
+    };
+    link->filterSet = [this] (juce::DynamicObject& prm)        // LOCK: keep this track's tone EQ as it is
+    {
+        if (apvts.getRawParameterValue ("toneLock")->load() < 0.5f) return;
+        prm.removeProperty ("toneOn");
+        for (int i = 0; i < svt::kTone; ++i) for (auto* w : { "f", "g", "q" }) prm.removeProperty (toneId (w, i));
+    };
     link->onOtherMessage = [this] (const juce::var& m)
     {
-        if (m.getProperty ("type", "").toString() == "measure-reset") bandMeter.requestReset();
+        const auto type = m.getProperty ("type", "").toString();
+        if (type == "measure-reset") { bandMeter.requestReset(); startAnalysis(); }      // The Master's RESET: listen again
+        else if (type == "analyze-finish")                                                // its PRESCRIBE: decide now
+        {
+            finishAnalysis();
+            finishedSeq = juce::jmax (finishedSeq, (int) m.getProperty ("seq", 0));
+            link->sendStatusNow();
+        }
     };
     link->extraStatus = [this]
     {
@@ -49,8 +55,13 @@ ServantProcessor::ServantProcessor()
         o->setProperty ("pow", bandMeter.outTotal.load());
         o->setProperty ("peak", (double) bandMeter.outPeak.load());
         o->setProperty ("seconds", bandMeter.outSeconds.load());
+        o->setProperty ("listening", getStage() == Stage::listening);
+        o->setProperty ("finished", finishedSeq);
+        int nRes = 0; getAppliedRes (nRes);
+        o->setProperty ("cleanup", analysis.valid ? cleanup.why + "; " + juce::String (nRes) + (nRes == 1 ? " resonance" : " resonances") : juce::String());
         return juce::var (o);
     };
+    startAnalysis();     // listens from the start, like The Master
     startTimerHz (10);
 }
 
@@ -59,8 +70,7 @@ ServantProcessor::~ServantProcessor()
     stopTimer();
     for (int i = 0; i < svt::kTone; ++i)
         for (auto* w : { "f", "g", "q" }) apvts.removeParameterListener (toneId (w, i), this);
-    apvts.removeParameterListener ("hpf", this);
-    apvts.removeParameterListener ("lpf", this);
+    for (auto* id : { "hpf", "lpf", "role" }) apvts.removeParameterListener (id, this);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayout()
@@ -122,7 +132,7 @@ svt::Params ServantProcessor::currentParams() const
     p.resDepth = v ("resDepth") * 0.01f;
     p.resQ = v ("resSharp");
     p.resSpeed = v ("resSpeed") * 0.01f;
-    if (auto* prof = currentProfile()) p.resTol = prof->resTol;
+    p.resTol = svt::roleRules ((int) v ("role")).resTol;
     p.toneOn = v ("toneOn") > 0.5f;
     for (int i = 0; i < svt::kTone; ++i) p.tone[i] = { v (toneId ("f", i)), v (toneId ("g", i)), v (toneId ("q", i)) };
     p.match = v ("match") > 0.5f;
@@ -155,16 +165,6 @@ void ServantProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     juce::ScopedNoDenormals nd;
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, buffer.getNumSamples());
 
-    // listening finishes by itself when the song stops playing
-    if (engine.analyzer.learning.load())
-    {
-        if (auto* ph = getPlayHead())
-            if (auto pos = ph->getPosition())
-            {
-                if (pos->getIsPlaying()) sawPlaying = true;
-                else if (sawPlaying && engine.analyzer.learnedSeconds() > 3.0f) { sawPlaying = false; finishRequested = true; }
-            }
-    }
     engine.process (buffer, currentParams());
     if (buffer.getNumChannels() > 0)
     {
@@ -187,63 +187,6 @@ const juce::StringArray& ServantProcessor::roleNames()
 juce::String ServantProcessor::getRoleName() const { return roleNames()[(int) apvts.getRawParameterValue ("role")->load()]; }
 
 //==============================================================================
-void ServantProcessor::refreshProfiles()
-{
-    foldersVersionSeen = folders.version.load();
-    auto found = folders.getProfiles();
-    library.set (builtIns, found);
-    // a session made elsewhere (or whose folder was removed) still has its profile
-    if (hasSessionProfile && library.find (sessionProfile.name) == nullptr)
-    {
-        found.push_back (sessionProfile);
-        library.set (builtIns, found);
-    }
-    if (library.find (profileName) == nullptr && ! library.all().empty())
-    {
-        // default: the first profile with songs in it, else the starter
-        profileName = library.all().front().name;
-        for (auto& p : library.all()) if (p.usable()) { profileName = p.name; break; }
-    }
-    // the selected profile's songs changed: re-decide from what was already heard
-    if (auto* p = currentProfile())
-    {
-        if (p->signature != appliedSignature)
-        {
-            const bool first = appliedSignature.isEmpty() && ! p->builtIn;
-            appliedSignature = p->signature;
-            if (! first && ltasFrames > 0 && ! engine.analyzer.learning.load()) decideAndApply (true);
-        }
-    }
-    ++analysisVersion;
-}
-
-void ServantProcessor::rescanProfilesNow()
-{
-    folders.scanNow();
-    refreshProfiles();
-}
-
-bool ServantProcessor::createProfileFolder (const juce::String& rawName)
-{
-    const auto name = juce::File::createLegalFileName (rawName.trim());
-    if (name.isEmpty()) return false;
-    svt::ProfileFolders::ensureFolders();
-    auto dir = svt::ProfileFolders::partsFolder().getChildFile (name);
-    if (! dir.isDirectory() && ! dir.createDirectory()) return false;
-    rescanProfilesNow();
-    selectProfile (name);
-    return true;
-}
-
-void ServantProcessor::selectProfile (const juce::String& name)
-{
-    if (library.find (name) == nullptr) return;
-    profileName = name;
-    if (auto* p = currentProfile()) appliedSignature = p->signature;
-    if (ltasFrames > 0 && ! engine.analyzer.learning.load() && currentProfile() != nullptr) decideAndApply (true);   // re-decide from what was heard, no need to play again
-    ++analysisVersion;
-}
-
 ServantProcessor::Stage ServantProcessor::getStage() const
 {
     if (engine.analyzer.learning.load()) return Stage::listening;
@@ -252,8 +195,6 @@ ServantProcessor::Stage ServantProcessor::getStage() const
 
 void ServantProcessor::startAnalysis()
 {
-    sawPlaying = false;
-    finishRequested = false;
     engine.analyzer.start();
     ++analysisVersion;
 }
@@ -285,27 +226,29 @@ void ServantProcessor::setParam (const juce::String& id, float value)
     }
 }
 
+svt::RoleProfile ServantProcessor::roleProfile() const
+{
+    svt::RoleProfile p;
+    p.hpf = cleanup.hpf; p.lpf = cleanup.lpf; p.resTol = cleanup.resTol;
+    return p;
+}
+
 void ServantProcessor::decideAndApply (bool applyToKnobs)
 {
-    const auto* prof = currentProfile();
-    if (prof == nullptr || ltasFrames <= 0) return;
-    analysis = svt::decide (ltas, ltasEnv, ltasRate, ltasFrames, *prof);
+    if (ltasFrames <= 0) return;
+    // the clean-up from where this track's content really starts and ends, plus its ROLE...
+    float measured[svt::kBands];
+    svt::bandCurve (ltas, ltasRate, measured);
+    cleanup = svt::decideCleanup (measured, (int) apvts.getRawParameterValue ("role")->load());
+    // ...and the resonances inside that range (no tone moves: The Master decides those from the mix)
+    analysis = svt::decide (ltas, ltasEnv, ltasRate, ltasFrames, roleProfile());
     if (! applyToKnobs) return;
 
+    const float hpfOld = apvts.getRawParameterValue ("hpf")->load(), lpfOld = apvts.getRawParameterValue ("lpf")->load();
     applying = true;
-    if (apvts.getRawParameterValue ("toneLock")->load() < 0.5f)
-    {
-        for (int i = 0; i < svt::kTone; ++i)
-        {
-            const bool used = i < analysis.nTone;
-            setParam (toneId ("f", i), used ? analysis.tone[i].f : kDefaultToneHz[i]);
-            setParam (toneId ("g", i), used ? analysis.tone[i].g : 0.0f);
-            setParam (toneId ("q", i), used ? analysis.tone[i].q : 1.0f);
-        }
-        setParam ("hpf", prof->hpf);
-        setParam ("lpf", prof->lpf);
-        for (auto& f : userSet) f = false;
-    }
+    const bool locked = apvts.getRawParameterValue ("toneLock")->load() > 0.5f;
+    if (! locked && ! userSet[kHpfFlag].load()) setParam ("hpf", cleanup.hpf);
+    if (! locked && ! userSet[kLpfFlag].load()) setParam ("lpf", cleanup.lpf);
     if (apvts.getRawParameterValue ("resLock")->load() < 0.5f)
     {
         nApplied = analysis.nRes;
@@ -314,10 +257,15 @@ void ServantProcessor::decideAndApply (bool applyToKnobs)
         engine.setResonances (applied, nApplied);
     }
     applying = false;
+    // what The Master reads from this track now matches the new filters
+    const float hpfNew = apvts.getRawParameterValue ("hpf")->load(), lpfNew = apvts.getRawParameterValue ("lpf")->load();
+    if (apvts.getRawParameterValue ("cleanOn")->load() > 0.5f && (hpfNew != hpfOld || lpfNew != lpfOld))
+        bandMeter.requestScale (svt::cleanupBandChange (ltasRate, hpfOld, lpfOld, hpfNew, lpfNew));
 }
 
 void ServantProcessor::parameterChanged (const juce::String& id, float)
 {
+    if (id == "role") { roleChanged = true; return; }   // re-decide the clean-up for the new role (timer)
     if (applying.load()) return;
     if (id == "hpf") userSet[kHpfFlag] = true;
     else if (id == "lpf") userSet[kLpfFlag] = true;
@@ -326,8 +274,7 @@ void ServantProcessor::parameterChanged (const juce::String& id, float)
 
 void ServantProcessor::timerCallback()
 {
-    if (finishRequested.exchange (false)) finishAnalysis();
-    if (folders.version.load() != foldersVersionSeen) refreshProfiles();
+    if (roleChanged.exchange (false) && ltasFrames > 0 && getStage() != Stage::listening) { decideAndApply (true); ++analysisVersion; }
 }
 
 //==============================================================================
@@ -335,8 +282,6 @@ void ServantProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     juce::ValueTree s ("SERVANT");
-    s.setProperty ("profile", profileName, nullptr);
-    if (auto* p = currentProfile()) s.setProperty ("profileData", p->toSessionString(), nullptr);
     juce::String flags, res, mutes;
     for (auto& f : userSet) flags << (f.load() ? "1" : "0");
     for (int i = 0; i < nApplied; ++i)
@@ -375,12 +320,6 @@ void ServantProcessor::setStateInformation (const void* data, int sizeInBytes)
     applying = false;
     if (! s.isValid()) return;
 
-    const juce::String name = s.getProperty ("profile", profileName);
-    svt::Profile saved;
-    if (svt::Profile::fromSessionString (s.getProperty ("profileData", "").toString(), saved)) { sessionProfile = saved; hasSessionProfile = true; }
-    profileName = name;
-    refreshProfiles();
-    if (auto* p = currentProfile()) appliedSignature = p->signature;
     const juce::String flags = s.getProperty ("userSet", "");
     for (int i = 0; i < kNumFlags; ++i) userSet[(size_t) i] = flags.substring (i, i + 1) == "1";
 

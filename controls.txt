@@ -3,73 +3,52 @@
   Castle Danger Music Company
 ===============================================================================
 
-The Servant listens to one track, compares it with a profile you made from
-songs you like, and sets the clean-up, resonance control and tone EQ to bring
-it in line. Everything it
-decides is on the knobs, so you can override any of it.
+The Servant goes on your tracks and works for The Master (on the master bus).
+There are no profiles to make any more: The Master hears the whole mix,
+compares it with the genre, and The Servant carries out its orders on each
+track. Everything it sets is on the knobs, so you can override any of it.
 
-It's made for mixing: process a track, print it, then move The Servant to the
-next track. Only one copy needs to run at a time.
-
--------------------------------------------------------------------------------
-THE WORKFLOW
--------------------------------------------------------------------------------
-  1. Put The Servant on a track.
-  2. PROFILE (top right): pick a profile, or hit NEW to make one (see below).
-  3. Hit ANALYZE and play the whole song from the start.
-  4. Stop playback. The Servant finishes listening by itself and makes its
-     decisions. (In the standalone app, or if your DAW doesn't report
-     playback, hit FINISH.)
-  5. Listen. Use COMPARE to hear the untouched track. Adjust anything you like.
-  6. Print the track (Render in Place / Bounce in Place / Commit, or record it
-     to a new track through a bus). Mute or hide the original.
-  7. Move The Servant to the next track and repeat.
-
-Changing the profile after analyzing (or adding songs to it) re-decides
-instantly from what was already heard. You don't need to play the song again.
+It needs The Master. Without it, it waits (and passes your track through).
 
 -------------------------------------------------------------------------------
-PROFILES: A FOLDER OF SONGS
+THE WORKFLOW (all from The Master)
 -------------------------------------------------------------------------------
-  A profile is the sound you want. You make it by giving The Servant songs
-  that sound the way you want this track to sound. One song is enough.
+  1. Put The Servant on every track you want balanced, and set each one's
+     ROLE (top right): Lead, Rhythm, Bass, Kick, Snare, Drums, Keys / Pads,
+     Other.
+  2. Put The Master last on the master bus. Each Servant links by itself.
+  3. On The Master press RESET and play the whole song. Every Servant listens
+     to its own track at the same time.
+  4. On The Master (FIX IT page, MY PLUGINS) press PRESCRIBE. Each Servant
+     finishes listening and decides its own CLEAN-UP and RESONANCES from what
+     its track plays and its ROLE. The Master then decides each track's TONE
+     EQ, COMPRESSOR and TRIM from the whole mix.
+  5. Press APPLY on The Master. It sets every track and explains each change
+     in its WHAT I CHANGED & WHY log.
 
-  NEW      Name it anything ("Sabbath Rhythm", "My Snare"). The Servant makes
-           a folder with that name and opens it.
-  FOLDER   Opens the selected profile's folder.
+  Changing a track's ROLE afterwards re-decides its clean-up right away from
+  what was already heard. Run PRESCRIBE again so The Master re-balances too.
 
-  Drop songs into the folder (WAV, AIFF, FLAC, MP3, OGG). The Servant
-  measures each one by itself in the background (a few seconds a song) and
-  the profile is ready. Add more songs any time: with one song it allows
-  +/-2.5 dB either side of the target; with three or more it measures how
-  much your songs really vary and uses that.
-
-  USE ISOLATED PARTS. For a guitar profile, feed it just the guitar, not the
-  whole band, or The Servant will push your guitar toward the sound of the
-  whole mix. Get parts from multitracks, or split them out of a finished song
-  with a stem-separation tool (for example Ultimate Vocal Remover).
-
-  Where the folders are:
-    macOS:   ~/Library/Application Support/Castle Danger/Profiles/
-    Windows: %APPDATA%\Castle Danger\Profiles\
-      Parts\   profiles for The Servant (isolated parts)
-      Mixes\   profiles for The Master (finished, mixed songs)
-
-  Each song is measured once; the numbers are kept in a hidden file in the
-  folder (.castle-danger-cache.json). No audio is copied anywhere. Profiles
-  are saved inside your session too, so a project opens right even on another
-  computer or after the folder is gone.
-
-  "Starter: Metal Rhythm Guitar" is built in so you can try The Servant
-  before you've made a profile.
+-------------------------------------------------------------------------------
+WHO DECIDES WHAT
+-------------------------------------------------------------------------------
+  The Servant (from this track + ROLE):
+    HIGH-PASS   from where the track's content really starts, within the
+                range for its role (a lead never below 90 Hz, kick and bass
+                keep their lows).
+    LOW-PASS    for rhythm parts only: rolls off the fizz above where the
+                content ends (8-12 kHz). Other roles: OFF.
+    RESONANCES  up to 12 frequencies that ring, ducked only while they ring.
+  The Master (from the whole mix + genre):
+    TONE EQ, COMPRESSOR, TRIM.
 
 -------------------------------------------------------------------------------
 ORDERS
 -------------------------------------------------------------------------------
-  ANALYZE      Starts listening. Silence and bleed quieter than -55 dBFS
-               don't count. While listening the button says FINISH.
-  RE-ANALYZE   Run it again after an edit or a new comp. Locked modules keep
-               their settings.
+  The big plate shows what The Servant is doing:
+    WAITING     no Master on the master bus yet
+    LISTENING   hearing the track (The Master's RESET starts this)
+    SERVED      decided (The Master's PRESCRIBE does this)
   MATCH        Keeps the output at the same loudness as the input, so you
                judge the sound, not the volume. Leave it on.
   COMPARE      Plays the untouched track (same timing, same level). Turn it
@@ -78,8 +57,6 @@ ORDERS
 -------------------------------------------------------------------------------
 THE CURVE
 -------------------------------------------------------------------------------
-  Yellow band    the profile's target and its tolerance (inside it, The Servant
-                 leaves the track alone)
   Grey line      your track as heard
   Red line       how it will come out
   Orange line    what The Servant is doing (EQ + clean-up)
@@ -90,76 +67,33 @@ THE CURVE
                  one alone); click again to bring it back.
 
 -------------------------------------------------------------------------------
-HOW HARD
+THE KNOBS
 -------------------------------------------------------------------------------
-  AMOUNT       Scales every tone move and the resonance depth. 100% = what
-               the profile asks for. Above 100% pushes further (marked red).
-               0% = only the clean-up filters.
+  AMOUNT       Scales every tone move and the resonance depth. 100% = as
+               decided. Above 100% pushes further. 0% = only the clean-up.
+  HIGH-PASS    24 dB/oct.   LOW-PASS  12 dB/oct, fully right = OFF.
+  DEPTH / SHARPNESS / SPEED   how hard, how narrow and how fast the
+               resonance cuts are.
+  RESONANCE LOCK   keeps the current resonances next time The Master
+               prescribes.
+  TONE EQ LOCK     keeps this track's tone EQ and clean-up exactly as they
+               are: The Master won't change them (it still sets COMPRESSOR
+               and TRIM).
+  COMPRESSOR   ON + AMOUNT. The threshold follows the track's own level and
+               it uses the 5 ms look-ahead, so hits are caught early. The
+               Master turns it on for the tracks that make the mix's peaks.
+  TRIM         The track's level in the mix, applied AFTER MATCH, so it
+               really changes the balance.
 
--------------------------------------------------------------------------------
-CLEAN-UP
--------------------------------------------------------------------------------
-  HIGH-PASS    Cuts rumble below the source's range (24 dB/oct).
-  LOW-PASS     Rolls off fizz above it (12 dB/oct). Fully right = OFF.
-  Both are set from the profile when you analyze.
-
--------------------------------------------------------------------------------
-RESONANCE
--------------------------------------------------------------------------------
-  Finds frequencies that ring (up to 12) and ducks only those, only while
-  they ring. A 5 ms look-ahead lets it catch them early.
-
-  DEPTH        How hard it pushes them down.
-  SHARPNESS    How narrow the cuts are (Q). Higher = more surgical.
-  SPEED        How fast the cuts react and let go.
-  LOCK         Keeps the current resonances when you analyze again.
-
--------------------------------------------------------------------------------
-TONE EQ
--------------------------------------------------------------------------------
-  Up to six broad, gentle bands (max +/-6 dB from the analysis) that move the
-  track toward the target curve. Each knob is labelled with its frequency.
-
-  LOCK         Keeps the tone EQ and clean-up when you analyze again.
-
-  Any knob you turn after an analysis turns GOLD, so you can see what you
-  changed and what The Servant decided.
+  Any knob you turn yourself turns GOLD, so you can see what you changed.
+  The Master leaves a gold HIGH-PASS / LOW-PASS alone.
 
 -------------------------------------------------------------------------------
 NOTES
 -------------------------------------------------------------------------------
-  - Latency: 5 ms, reported to your DAW, so printed tracks stay in time.
-  - The analysis is saved with your session, so reopening it doesn't mean
-    analyzing again.
-  - Version 0.2 is a prototype. Vocals (with a de-esser) come in version 2.
-
-
--------------------------------------------------------------------------------
-MIX LINK  (with The Master)
--------------------------------------------------------------------------------
-  The Servant can also work for the whole mix. Put The Master last on your
-  master bus and The Servant links to it by itself (Castle Danger Link:
-  automatic, offline, this computer only).
-
-  ROLE        What the track does: Lead, Rhythm, Bass, Kick, Snare, Drums,
-              Keys / Pads or Other. It's a label, not a profile. The Master
-              uses it to balance the mix: kick and bass own the low end, the
-              lead stays on top.
-  COMPRESSOR  ON + AMOUNT. The threshold follows the track's own level, and it
-              uses The Servant's 5 ms look-ahead, so hits are caught before
-              they arrive. The Master turns it on for the tracks that make the
-              mix's peaks.
-  TRIM        The track's level in the mix, applied AFTER MATCH, so it really
-              changes the balance. The Master sets it; move it any time.
-
-  How it works: each Servant tells The Master what its track sends to the mix
-  in 10 frequency bands. The Master compares the whole mix with the genre's
-  MIX profile and shares each fix out to the tracks that cause it: the track
-  that makes most of the mud gets most of the cut. On The Master's FIX IT page
-  (MY PLUGINS) press PRESCRIBE, check YOUR TRACKS, then APPLY. The Master sets
-  this track's tone EQ bands, compressor and trim, and explains each change.
-  Your own changes afterwards show gold as usual.
-
-  For this, The Servant has to be on all the tracks at the same time (not the
-  one-track-at-a-time print workflow). Once you're happy, you can still print
-  tracks to save CPU.
+  - Latency: 5 ms, reported to your DAW, so tracks stay in time.
+  - What was heard and decided is saved with your session.
+  - The Servant has to be on all the tracks at the same time while The
+    Master balances them. Once you're happy you can print tracks to save CPU.
+  - Profile folders from older versions are no longer used; you can delete
+    ~/Library/Application Support/Castle Danger/Profiles/Parts.

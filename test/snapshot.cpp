@@ -1,9 +1,7 @@
 // Headless checks (run locally and in CI):
-//  1) profiles: the built-in starter loads, bad JSON is rejected; a folder of songs becomes a
-//     profile (one song is enough), measurements are cached, adding a song refines it,
-//     empty folders are listed but can't be used, NEW makes a folder
-//  2) analysis: a profile made from a clean riff, then the same riff made boxy and ringing: it
-//     finds the planted resonances, cuts the boxy low-mids, and the result lands near the clean one
+//  1) role rules: the clean-up lands inside each role's range, from where the content starts / ends
+//  2) analysis (run by The Master): a boxy, ringing riff: it finds the planted resonances, decides
+//     the clean-up from the track and its ROLE, makes no tone moves of its own
 //  3) DSP: transparent when everything is off, COMPARE = the dry track (latency aligned),
 //     MATCH holds the level, silence stays silent, AMOUNT scales the moves
 //  4) state: everything comes back after save / load, user overrides are remembered
@@ -80,19 +78,6 @@ struct Riff
     }
 };
 
-static void writeWav (const juce::File& f, Riff riff, double seconds)
-{
-    f.getParentDirectory().createDirectory();
-    f.deleteFile();
-    juce::WavAudioFormat wav;
-    auto os = f.createOutputStream();
-    std::unique_ptr<juce::OutputStream> stream (os.release());
-    auto w = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}.withSampleRate (riff.sr).withNumChannels (2).withBitsPerSample (24));
-    juce::AudioBuffer<float> b (2, (int) (seconds * riff.sr));
-    for (int i = 0; i < b.getNumSamples(); ++i) for (int c = 0; c < 2; ++c) b.setSample (c, i, riff.sample (i, c));
-    w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
-}
-
 struct Render { std::vector<float> l, r; };
 
 static Render render (ServantProcessor& p, const Gen& g, double seconds, double skipSec, double sr = 48000.0, bool prepare = true)
@@ -149,71 +134,30 @@ int main (int argc, char** argv)
     outDir.createDirectory();
     const double sr = 48000.0;
 
-    // profiles live in a scratch folder for the test
-    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("servant-test-profiles");
-    root.deleteRecursively();
-    svt::ProfileFolders::rootOverride() = root;
-    const auto parts = root.getChildFile ("Parts");
-
-    //==== 1) profiles
+    //==== 1) role rules
     {
-        ServantProcessor p;
-        const auto* prof = p.getLibrary().find ("Starter: Metal Rhythm Guitar");
-        check (prof != nullptr && prof->usable() && prof->builtIn, "built-in starter profile loads");
-        check (p.getProfileName() == "Starter: Metal Rhythm Guitar", "with no folders, the starter is selected");
-        if (prof != nullptr)
-        {
-            double mean = 0; int n = 0;
-            for (int k = 0; k < svt::kBands; ++k) if (svt::bandHz (k) >= 99 && svt::bandHz (k) <= 8100) { mean += prof->target[k]; ++n; }
-            check (std::abs (mean / n) < 0.01, "profile target is normalised");
-            check (prof->hpf == 80.0f && prof->lpf == 12000.0f, "profile HPF / LPF read");
-        }
-        svt::Profile bad;
-        check (! svt::Profile::fromString ("{\"format\":\"nope\"}", bad), "a non-profile JSON is rejected");
-        check (! svt::Profile::fromString ("{\"format\":\"castle-danger-profile\",\"name\":\"X\",\"curve\":[[100,0],[50,0]]}", bad),
-               "a profile with frequencies out of order is rejected");
-        check (parts.isDirectory() && root.getChildFile ("Mixes").isDirectory() && root.getChildFile ("READ ME.txt").existsAsFile(),
-               "first run makes Profiles/Parts, Profiles/Mixes and a READ ME");
+        float flat[svt::kBands];
+        for (int k = 0; k < svt::kBands; ++k) flat[k] = svt::bandHz (k) < 140.0f ? -40.0f : (svt::bandHz (k) > 6000.0f ? -50.0f : 0.0f);
+        const auto lead = svt::decideCleanup (flat, 0), rhythm = svt::decideCleanup (flat, 1), bass = svt::decideCleanup (flat, 2);
+        check (lead.hpf >= 90.0f && lead.hpf <= 180.0f && lead.lpf > 19900.0f, "LEAD: high-pass from where it starts, no low-pass (" + juce::String (lead.hpf, 0) + " Hz)");
+        check (rhythm.lpf >= 8000.0f && rhythm.lpf <= 12000.0f, "RHYTHM: low-pass above where the content ends (" + juce::String (rhythm.lpf, 0) + " Hz)");
+        check (bass.hpf <= 45.0f && bass.lpf > 19900.0f, "BASS keeps its low end (" + juce::String (bass.hpf, 0) + " Hz)");
+        const auto ch = svt::cleanupBandChange (48000.0, 80.0f, 20000.0f, 150.0f, 9000.0f);
+        check (ch[0] < -10.0f && ch[1] < -3.0f && std::abs (ch[5]) < 0.2f && ch[9] < -2.0f, juce::String::formatted ("a filter change is worked out per Master band (sub %.1f, mid %.2f, air %.1f dB)", ch[0], ch[5], ch[9]));
     }
 
     ServantProcessor proc;
     setP (proc, "match", 0);
-    {
-        writeWav (parts.getChildFile ("Clean Guitar").getChildFile ("song one.wav"), Riff (sr, false), 10.0);
-        root.getChildFile ("Parts").getChildFile ("Empty One").createDirectory();
-        proc.rescanProfilesNow();
-        const auto* cg = proc.getLibrary().find ("Clean Guitar");
-        check (cg != nullptr && cg->songs == 1 && cg->usable(), "a folder with one song becomes a profile");
-        check (cg != nullptr && cg->tol[30] == 2.5f, "one song: fixed +-2.5 dB allowance");
-        check (parts.getChildFile ("Clean Guitar").getChildFile (".castle-danger-cache.json").existsAsFile(), "measurements are cached in the folder");
-        const auto* em = proc.getLibrary().find ("Empty One");
-        check (em != nullptr && em->songs == 0 && ! em->usable(), "an empty folder is listed but can't be used yet");
+    setP (proc, "role", 1.0f);   // Rhythm
 
-        // a different processor (another plugin instance) reads the cache instead of measuring again
-        ServantProcessor other;
-        other.rescanProfilesNow();
-        check (other.getLibrary().find ("Clean Guitar") != nullptr && other.getLibrary().find ("Clean Guitar")->songs == 1, "another instance sees the profile");
-
-        writeWav (parts.getChildFile ("Clean Guitar").getChildFile ("song two.wav"), Riff (sr, false, 1.12), 10.0);
-        proc.rescanProfilesNow();
-        cg = proc.getLibrary().find ("Clean Guitar");
-        check (cg != nullptr && cg->songs == 2, "dropping in another song refines the profile");
-
-        check (proc.createProfileFolder ("Sabbath / Rhythm") && ! proc.getProfileName().containsChar ('/')
-                   && parts.getChildFile (proc.getProfileName()).isDirectory() && proc.currentProfile() == nullptr,
-               "NEW makes a folder with a safe name and selects it (empty until songs arrive)");
-        proc.selectProfile ("Clean Guitar");
-        check (proc.getProfileName() == "Clean Guitar" && proc.currentProfile() != nullptr, "picking a profile");
-    }
-
-    //==== 2) analysis on the test riff
+    //==== 2) analysis on the test riff (The Master's RESET -> play -> PRESCRIBE)
     Riff riff (sr);
     Gen riffGen = [&riff] (int64_t n, int c) { return riff.sample (n, c); };
     const auto before = render (proc, riffGen, 8.0, 0.0);
     const auto ltasBefore = ltasOf (before, sr);   // processed with nothing decided yet (just the default HPF)
 
+    check (proc.getStage() == ServantProcessor::Stage::listening, "a new Servant is listening from the start (like The Master)");
     proc.startAnalysis();
-    check (proc.getStage() == ServantProcessor::Stage::listening, "ANALYZE starts listening");
     riff = Riff (sr);
     render (proc, riffGen, 12.0, 0.0);
     proc.finishAnalysis();
@@ -231,36 +175,26 @@ int main (int argc, char** argv)
     std::cout << "       resonances: " << resList << std::endl;
     check (found900 && found2500, "finds the planted 900 Hz and 2.5 kHz rings");
     check (a.nRes <= 6, "doesn't flag every riff harmonic as a resonance (" + juce::String (a.nRes) + " found)");
+    check (a.nTone == 0 && getP (proc, ServantProcessor::toneId ("g", 0)) == 0.0f, "no tone moves of its own: The Master decides the tone from the mix");
+    const auto& cl = proc.getCleanup();
+    std::cout << "       clean-up: " << cl.why << std::endl;
+    check (std::abs (getP (proc, "hpf") - cl.hpf) < 0.5f && std::abs (getP (proc, "lpf") - cl.lpf) < 1.0f && cl.hpf >= 70.0f && cl.hpf <= 160.0f
+               && cl.lpf >= 8000.0f && cl.lpf <= 12000.0f,
+           "clean-up decided from the track and its ROLE lands on the knobs (" + juce::String (getP (proc, "hpf"), 0) + " Hz / " + juce::String (getP (proc, "lpf"), 0) + " Hz)");
+    check (! proc.isUserSet (ServantProcessor::kHpfFlag), "decided knobs aren't marked as user-set");
 
-    juce::String toneList; bool boxCut = false;
-    for (int i = 0; i < a.nTone; ++i)
-    {
-        toneList << juce::String (a.tone[i].f, 0) << " Hz " << juce::String (a.tone[i].g, 1) << " dB Q" << juce::String (a.tone[i].q, 2) << "  ";
-        if (a.tone[i].f > 250 && a.tone[i].f < 650 && a.tone[i].g < -2.0f) boxCut = true;
-    }
-    std::cout << "       tone EQ: " << toneList << std::endl;
-    std::cout << "       excess outside tolerance: " << a.excessBefore << " dB -> " << a.excessAfter << " dB" << std::endl;
-    check (boxCut, "tone EQ cuts the boxy low-mids");
-    check (a.excessAfter < a.excessBefore * 0.65f, "tone EQ alone takes out over a third of the error (the rings are left to the suppressor)");
-    bool knobsMatch = true;
-    for (int i = 0; i < a.nTone; ++i)
-        knobsMatch = knobsMatch && std::abs (getP (proc, ServantProcessor::toneId ("g", i)) - a.tone[i].g) < 0.02f
-                                && std::abs (getP (proc, ServantProcessor::toneId ("f", i)) / a.tone[i].f - 1.0f) < 0.01f;
-    check (knobsMatch, "the decisions land on the knobs");
-    check (std::abs (getP (proc, "lpf") - proc.currentProfile()->lpf) < 1.0f && std::abs (getP (proc, "hpf") - proc.currentProfile()->hpf) < 0.5f,
-           "clean-up takes the profile's filters (" + juce::String (getP (proc, "hpf"), 0) + " Hz / " + juce::String (getP (proc, "lpf"), 0) + " Hz)");
-    check (! proc.isUserSet (0), "decided knobs aren't marked as user-set");
+    // a new ROLE re-decides from what was heard, no need to play again
+    setP (proc, "role", 0.0f);   // Lead
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+    check (getP (proc, "lpf") > 19900.0f, "changing the ROLE re-decides the clean-up (a lead gets no low-pass)");
+    setP (proc, "role", 1.0f);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+    check (getP (proc, "lpf") < 19900.0f, "...and back for a rhythm part");
 
-    // process the riff with the decisions and measure the result
+    // process the riff with the decisions: the rings are tamed
     riff = Riff (sr);
     const auto after = render (proc, riffGen, 8.0, 1.0, sr, false);
     const auto ltasAfter = ltasOf (after, sr);
-    const auto* prof = proc.currentProfile();
-    float cb[svt::kBands], ca[svt::kBands], eb[svt::kBands], ea[svt::kBands];
-    svt::bandCurve (ltasBefore, sr, cb); svt::bandCurve (ltasAfter, sr, ca);
-    svt::excessCurve (cb, *prof, eb); svt::excessCurve (ca, *prof, ea);
-    std::cout << "       processed riff, error vs profile: " << svt::rmsOf (eb) << " dB -> " << svt::rmsOf (ea) << " dB" << std::endl;
-    check (svt::rmsOf (ea) < svt::rmsOf (eb) * 0.6f, "processed audio is much closer to the profile");
     const float p25b = peakProminenceNear (ltasBefore, sr, 2500), p25a = peakProminenceNear (ltasAfter, sr, 2500);
     const float p9b = peakProminenceNear (ltasBefore, sr, 900), p9a = peakProminenceNear (ltasAfter, sr, 900);
     std::cout << "       2.5 kHz ring " << p25b << " -> " << p25a << " dB, 900 Hz ring " << p9b << " -> " << p9a << " dB" << std::endl;
@@ -336,17 +270,7 @@ int main (int argc, char** argv)
         int n1 = 0, n2 = 0; proc.getAppliedRes (n1); q.getAppliedRes (n2);
         check (n1 == n2 && q.getEngine().muted[0].load(), "resonances and mutes come back");
         check (q.getAnalysis().valid && q.isUserSet (0) && ! q.isUserSet (1), "the analysis and user overrides come back");
-        check (std::abs (q.getAnalysis().excessBefore - a.excessBefore) < 0.01f, "the saved analysis matches");
-        check (q.getProfileName() == "Clean Guitar", "the profile choice comes back");
-
-        // the session still opens right if the profile's folder is gone
-        parts.getChildFile ("Clean Guitar").deleteRecursively();
-        ServantProcessor r;
-        r.rescanProfilesNow();
-        r.setStateInformation (mb.getData(), (int) mb.getSize());
-        check (r.getProfileName() == "Clean Guitar" && r.currentProfile() != nullptr
-                   && std::abs (r.currentProfile()->target[30] - proc.currentProfile()->target[30]) < 0.01f,
-               "a session keeps its profile even if the folder is deleted");
+        check (std::abs (q.getCleanup().hpf - proc.getCleanup().hpf) < 0.01f && std::abs (q.getCleanup().lpf - proc.getCleanup().lpf) < 0.01f, "the clean-up decision comes back");
     }
 
 
@@ -419,7 +343,40 @@ int main (int argc, char** argv)
         master.send (reset);
         pump (300);
         render (q, [] (int64_t, int) { return 0.0f; }, 0.05, 0.0, 48000.0, false);
-        check (q.getBandMeter().outSeconds.load() < 0.5, "The Master can restart the track measurement (in step with its own analysis)");
+        check (q.getBandMeter().outSeconds.load() < 0.5 && q.getStage() == ServantProcessor::Stage::listening,
+               "The Master's RESET restarts the track measurement and the listening (in step with its own analysis)");
+
+        // PRESCRIBE: The Master asks it to finish; it decides, rescales what it measured, says it's done
+        setP (q, "cleanOn", 1.0f); setP (q, "role", 0.0f);   // a lead that only plays up from 330 Hz
+        render (q, [] (int64_t n, int) { return 0.3f * (float) std::sin (juce::MathConstants<double>::twoPi * 330.0 * (double) n / 48000.0); }, 4.0, 0.0, 48000.0, false);
+        pump (400);
+        const double subBefore = q.getBandMeter().out[1].load(), midBefore = q.getBandMeter().out[3].load();
+        lastStatus = juce::var();
+        auto fin = cdlink::Endpoint::makeMessage ("analyze-finish");
+        fin->setProperty ("seq", 7);
+        master.send (fin);
+        for (int i = 0; i < 40 && (int) lastStatus.getProperty ("extra", {}).getProperty ("finished", 0) != 7; ++i) pump (25);
+        const auto ex2 = lastStatus.getProperty ("extra", {});
+        std::cout << "       after finish: " << ex2.getProperty ("cleanup", "").toString() << std::endl;
+        check ((int) ex2.getProperty ("finished", 0) == 7 && ! (bool) ex2.getProperty ("listening", true) && ex2.getProperty ("cleanup", "").toString().contains ("HIGH-PASS"),
+               "PRESCRIBE: The Servant finishes, decides its clean-up and tells The Master right away");
+        const double subRatio = 10.0 * std::log10 (q.getBandMeter().out[1].load() / subBefore), midRatio = 10.0 * std::log10 (q.getBandMeter().out[3].load() / midBefore);
+        check (q.apvts.getRawParameterValue ("hpf")->load() > 150.0f && subRatio < -6.0 && std::abs (midRatio) < 1.0,
+               juce::String::formatted ("what The Master reads is rescaled to the new high-pass (%.0f Hz: 60-120 Hz %.1f dB, 250-500 Hz %.1f dB)",
+                                        q.apvts.getRawParameterValue ("hpf")->load(), subRatio, midRatio));
+
+        // LOCK: The Master leaves this track's tone EQ alone
+        setP (q, "toneLock", 1.0f);
+        lastApplied = juce::var();
+        auto set2 = cdlink::Endpoint::makeMessage ("set");
+        auto* prm2 = new juce::DynamicObject();
+        prm2->setProperty ("t1g", 4.0); prm2->setProperty ("trim", 2.0);
+        set2->setProperty ("params", juce::var (prm2));
+        master.send (set2, q.getLink().getId());
+        for (int i = 0; i < 40 && ! lastApplied.isObject(); ++i) pump (50);
+        check (std::abs (q.apvts.getRawParameterValue ("t1g")->load() + 2.5f) < 0.02f && std::abs (q.apvts.getRawParameterValue ("trim")->load() - 2.0f) < 0.02f,
+               "LOCK keeps the tone EQ; The Master still sets the level");
+        setP (q, "toneLock", 0.0f);
     }
 
     //==== 5) GUI
@@ -439,7 +396,6 @@ int main (int argc, char** argv)
         delete ed;
     }
 
-    root.deleteRecursively();
     std::cout << "\n" << failures << " failure(s)" << std::endl;
     return failures == 0 ? 0 : 1;
 }

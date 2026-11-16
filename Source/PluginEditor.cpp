@@ -501,13 +501,12 @@ void CurveDisplay::paint (juce::Graphics& g)
 
     juce::Graphics::ScopedSaveState ss (g);
     g.reduceClipRegion (p.toNearestInt().withTrimmedTop (-12));
-    if (auto* chosen = proc.getLibrary().find (proc.getProfileName()))
     {
+        const auto track = proc.getTrackName();
         g.setColour (pal::hazard.withAlpha (0.8f)); g.setFont (ledFont (10.5f));
-        g.drawText ("PROFILE: " + chosen->name.toUpperCase() + (chosen->builtIn ? "" : "  //  " + juce::String (chosen->songs) + (chosen->songs == 1 ? " SONG" : " SONGS")),
+        g.drawText ("ROLE: " + proc.getRoleName().toUpperCase() + (track.isNotEmpty() ? "  //  " + track.toUpperCase() : juce::String()),
                     juce::Rectangle<float> (p.getX() + 2.0f, p.getY() - 12.0f, p.getWidth() * 0.5f, 11.0f), juce::Justification::centredLeft);
     }
-    const auto* prof = proc.currentProfile();
     const auto& a = proc.getAnalysis();
 
     auto curvePath = [&] (std::function<float (int)> dbAt)
@@ -520,24 +519,6 @@ void CurveDisplay::paint (juce::Graphics& g)
         }
         return path;
     };
-
-    // profile target: a band, the tolerance either side
-    if (prof != nullptr)
-    {
-        juce::Path band;
-        for (int k = 0; k < svt::kBands; ++k)
-        {
-            const juce::Point<float> pt (xFor (svt::bandHz (k)), yFor (prof->target[k] + prof->tol[k]));
-            if (k == 0) band.startNewSubPath (pt); else band.lineTo (pt);
-        }
-        for (int k = svt::kBands - 1; k >= 0; --k) band.lineTo (xFor (svt::bandHz (k)), yFor (prof->target[k] - prof->tol[k]));
-        band.closeSubPath();
-        g.setColour (pal::hazard.withAlpha (0.13f)); g.fillPath (band);
-        auto centre = curvePath ([prof] (int k) { return prof->target[k]; });
-        juce::Path dashed; const float dl[] = { 4.0f, 4.0f };
-        juce::PathStrokeType (1.0f).createDashedStroke (dashed, centre, dl, 2);
-        g.setColour (pal::hazard.withAlpha (0.6f)); g.fillPath (dashed);
-    }
 
     // EQ curve (what The Servant is doing), around 0 dB
     {
@@ -572,7 +553,8 @@ void CurveDisplay::paint (juce::Graphics& g)
     {
         g.setColour (pal::paint.withAlpha (0.55f));
         g.setFont (tex::stencil (16.0f).withExtraKerningFactor (0.12f));
-        g.drawText (proc.getStage() == ServantProcessor::Stage::listening ? "LISTENING..." : "HIT ANALYZE AND PLAY THE SONG",
+        g.drawText (! proc.getLink().masterNearby() ? "WAITING FOR THE MASTER"
+                    : (proc.getStage() == ServantProcessor::Stage::listening ? "LISTENING...  THE MASTER DECIDES AT PRESCRIBE" : "PLAY, THEN RESET ON THE MASTER"),
                     p.withHeight (p.getHeight() * 0.28f).toNearestInt(), juce::Justification::centred);
     }
 
@@ -612,7 +594,7 @@ void CurveDisplay::paint (juce::Graphics& g)
 
     // legend
     g.setFont (ledFont (9.5f));
-    auto lg = juce::Rectangle<float> (p.getRight() - 290, p.getBottom() - 16, 290, 13);
+    auto lg = juce::Rectangle<float> (p.getRight() - 224, p.getBottom() - 16, 224, 13);
     g.setColour (pal::screen.withAlpha (0.85f)); g.fillRoundedRectangle (lg.expanded (6.0f, 3.0f), 3.0f);
     auto item = [&] (juce::Colour c, const juce::String& t, float w)
     {
@@ -620,7 +602,6 @@ void CurveDisplay::paint (juce::Graphics& g)
         g.setColour (c); g.fillRect (r.removeFromLeft (12).withSizeKeepingCentre (12, 3));
         g.setColour (pal::paintDim); g.drawText (t, r.withTrimmedLeft (4), juce::Justification::centredLeft);
     };
-    item (pal::hazard.withAlpha (0.7f), "TARGET", 66);
     item (pal::paintDim, "TRACK", 60);
     item (pal::signalHot, "RESULT", 66);
     item (pal::rustLight, "EQ", 40);
@@ -665,7 +646,7 @@ void CurveDisplay::mouseMove (const juce::MouseEvent& e)
         setTooltip ("Tone band " + juce::String (n + 1) + ": " + hzText (params.tone[n].f) + ", " + juce::String (params.tone[n].g, 1) + " dB, Q "
                     + juce::String (params.tone[n].q, 2) + ". Drag to move it, scroll to make it wider or narrower.");
     }
-    else setTooltip ("Yellow band: the profile's target. Grey: your track. Red: how it will come out. Orange: what The Servant is doing. "
+    else setTooltip ("Grey: your track. Red: how it will come out. Orange: what The Servant is doing. "
                      "Drag the numbered dots to override a tone move; click a triangle up top to mute a resonance.");
     setMouseCursor (n >= 0 || r >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
@@ -726,17 +707,17 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     setLookAndFeel (&lnf);
 
     amountKnob = &makeKnob ("amount", "AMOUNT",
-        "How much of what The Servant decided you hear. 100% = exactly what the profile asks for. Above 100% pushes further, 0% = only the clean-up filters.", 21.0f);
+        "How much of the tone EQ and resonance control you hear. 100% = exactly what The Master and The Servant decided. Above 100% pushes further, 0% = only the clean-up filters.", 21.0f);
     amountKnob->slider.setName ("amount");
-    hpfKnob = &makeKnob ("hpf", "HIGH-PASS", "Cuts rumble below the source's useful range (24 dB/oct). Set from the profile when you analyze.");
-    lpfKnob = &makeKnob ("lpf", "LOW-PASS", "Rolls off fizz above the source's useful range (12 dB/oct). Turn fully right for OFF.");
+    hpfKnob = &makeKnob ("hpf", "HIGH-PASS", "Cuts rumble below the track's useful range (24 dB/oct). Decided at PRESCRIBE from where this track's content starts, and its ROLE. Turn it to override (it turns gold).");
+    lpfKnob = &makeKnob ("lpf", "LOW-PASS", "Rolls off fizz above the track's useful range (12 dB/oct). Decided at PRESCRIBE for rhythm parts; turn fully right for OFF.");
     depthKnob = &makeKnob ("resDepth", "DEPTH", "How hard the resonances are pushed down when they ring. They're only cut while they ring, never all the time.");
     sharpKnob = &makeKnob ("resSharp", "SHARPNESS", "How narrow the resonance cuts are. Higher = surgical, lower = broader and smoother.");
     speedKnob = &makeKnob ("resSpeed", "SPEED", "How fast the resonance cuts react and let go. Faster for picking and drums, slower for sustained chords.");
     for (int i = 0; i < svt::kTone; ++i)
     {
         toneKnobs[i] = &makeKnob (ServantProcessor::toneId ("g", i), "BAND " + juce::String (i + 1),
-                                  "Tone band " + juce::String (i + 1) + " gain. Set by the analysis; turn it to override (it turns gold). Move its frequency on the curve above.");
+                                  "Tone band " + juce::String (i + 1) + " gain. Set by The Master from the whole mix; turn it to override (it turns gold). Move its frequency on the curve above.");
         toneKnobs[i]->slider.getProperties().set ("bipolar", true);
     }
 
@@ -747,48 +728,22 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     compareButton.setTooltip ("Hear the untouched track (same timing, same level) to check The Servant made it better. Turn it off before you print!");
     cleanOn.setTooltip ("High-pass and low-pass clean-up.");
     resOn.setTooltip ("The resonance suppressor: finds frequencies that ring and ducks only those, only while they ring.");
-    resLock.setTooltip ("Keeps the current resonances when you analyze again or change the profile.");
-    toneOn.setTooltip ("Broad, gentle EQ moves toward the profile's target curve.");
-    toneLock.setTooltip ("Keeps the current tone EQ (and clean-up) when you analyze again or change the profile.");
+    resLock.setTooltip ("Keeps the current resonances the next time The Master prescribes.");
+    toneOn.setTooltip ("Broad, gentle EQ moves, set by The Master so this track fits the mix and the genre.");
+    toneLock.setTooltip ("Keeps this tone EQ and clean-up as they are: The Master won't change them.");
     auto attach = [this] (const char* id, juce::ToggleButton& b)
     { buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, id, b)); };
     attach ("match", matchButton); attach ("compare", compareButton); attach ("cleanOn", cleanOn);
     attach ("resOn", resOn); attach ("resLock", resLock); attach ("toneOn", toneOn); attach ("toneLock", toneLock);
 
     addAndMakeVisible (analyzeButton);
-    analyzeButton.setTooltip ("Hit ANALYZE, then play the whole song. When playback stops (or you hit FINISH) The Servant decides everything. Then print the track and move The Servant to the next one.");
-    analyzeButton.onClick = [this]
-    {
-        if (proc.getStage() == ServantProcessor::Stage::listening) proc.finishAnalysis();
-        else proc.startAnalysis();
-    };
+    analyzeButton.setTooltip ("What The Servant is doing. The Master runs it: RESET on The Master starts the listening, PRESCRIBE finishes it.");
     addAndMakeVisible (status);
     status.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (curve);
     addAndMakeVisible (bell);
     bell.setInterceptsMouseClicks (false, false);
 
-    addAndMakeVisible (profileBox);
-    profileBox.setJustificationType (juce::Justification::centredLeft);
-    profileBox.setTooltip ("The sound to shape this track toward. Every profile is a folder of songs you picked: hit NEW to make one, FOLDER to add songs.");
-    profileBox.onChange = [this]
-    {
-        const int i = profileBox.getSelectedId() - 1;
-        const auto& all = proc.getLibrary().all();
-        if (i >= 0 && i < (int) all.size() && all[(size_t) i].name != proc.getProfileName()) proc.selectProfile (all[(size_t) i].name);
-    };
-    for (auto* b : { &newButton, &folderButton }) addAndMakeVisible (*b);
-    newButton.setTooltip ("Make a new profile: name it, then drop songs into its folder. One song is enough; isolated parts work best (just the guitar, just the bass).");
-    folderButton.setTooltip ("Open this profile's folder to add or remove songs. The Servant measures new songs by itself.");
-    newButton.onClick = [this] { promptNewProfile(); };
-    folderButton.onClick = [this]
-    {
-        svt::ProfileFolders::ensureFolders();
-        auto dir = svt::ProfileFolders::partsFolder().getChildFile (proc.getProfileName());
-        (dir.isDirectory() ? dir : svt::ProfileFolders::partsFolder()).startAsProcess();
-    };
-
-    refreshProfileBox();
     // ---- MIX LINK (Castle Danger Link to The Master)
     compKnob = &makeKnob ("comp", "AMOUNT", "Compressor amount. The threshold follows the track's own level, so it works the same on any track. The Master sets this when the track's peaks stick out of the mix.");
     trimKnob = &makeKnob ("trim", "LEVEL", "The track's level in the mix, after MATCH (so it really changes the balance). The Master sets this to balance the mix; move it any time.");
@@ -796,7 +751,7 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
     addAndMakeVisible (compOn);
     roleBox.addItemList (ServantProcessor::roleNames(), 1);
-    roleBox.setTooltip ("What this track does in the song. The Master uses it to balance the mix: the LEAD stays on top, KICK and BASS own the low end. Not a profile, just a label.");
+    roleBox.setTooltip ("What this track does in the song. The Master balances the mix by it (the LEAD stays on top, KICK and BASS own the low end), and The Servant picks its clean-up by it.");
     roleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, "role", roleBox);
     addAndMakeVisible (roleBox);
     linkLabel.setFont (juce::Font (juce::FontOptions (12.5f)));
@@ -804,7 +759,7 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     linkLabel.setJustificationType (juce::Justification::topLeft);
     linkLabel.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (linkLabel);
-    linkLabel.setText ("Not linked. Put The Master last on your master bus: it hears the whole mix and can set this track's tone, compressor and trim (MY PLUGINS mode).", juce::dontSendNotification);
+    linkLabel.setText ("Not linked. The Servant works with The Master: put The Master last on your master bus and use its MY PLUGINS mode.", juce::dontSendNotification);
     linkLabel.setColour (juce::Label::textColourId, pal::paintDim);
 
     setSize (1060, 840);
@@ -853,10 +808,8 @@ void ServantEditor::resized()
     logoArea  = { 114, 8, 400, 70 };
     badgeArea = { 548, 14, 260, 86 };
     crestArea = { 556, 19, 76, 76 };
-    profileArea = { 842, 14, 200, 86 };
-    profileBox.setBounds (842, 36, 200, 26);
-    newButton.setBounds (842, 70, 96, 24);
-    folderButton.setBounds (946, 70, 96, 24);
+    roleArea = { 842, 14, 200, 86 };
+    roleBox.setBounds (842, 38, 200, 28);
     stripeArea = { 0, 110, getWidth(), 18 };
 
     plates.push_back ({ "ORDERS", { 16, 138, 300, 250 }, true });
@@ -890,8 +843,7 @@ void ServantEditor::resized()
         placeKnob (*toneKnobs[i], { 688 + (i % 3) * 116, 462 + (i / 3) * 112, 112, 108 });
 
     plates.push_back ({ "MIX LINK  //  THE MASTER", { 16, 698, 520, 130 } });
-    roleBox.setBounds (100, 726, 200, 28);
-    linkLabel.setBounds (28, 762, 500, 58);
+    linkLabel.setBounds (28, 726, 500, 94);
     plates.push_back ({ "COMPRESSOR", { 546, 698, 250, 130 } });
     compOn.setBounds (558, 728, 90, 30);
     placeKnob (*compKnob, { 668, 712, 116, 110 });
@@ -901,91 +853,46 @@ void ServantEditor::resized()
     buildBackdrop();
 }
 
-void ServantEditor::refreshProfileBox()
-{
-    const auto& all = proc.getLibrary().all();
-    profileBox.clear (juce::dontSendNotification);
-    bool heading = false;
-    for (size_t i = 0; i < all.size(); ++i)
-    {
-        const auto& p = all[i];
-        if (p.builtIn && ! heading) { profileBox.addSeparator(); heading = true; }
-        const auto label = p.builtIn ? p.name
-                                     : p.name + (p.songs == 0 ? "  (empty)" : "  (" + juce::String (p.songs) + (p.songs == 1 ? " song)" : " songs)"));
-        profileBox.addItem (label, (int) i + 1);
-        if (p.name == proc.getProfileName()) profileBox.setSelectedId ((int) i + 1, juce::dontSendNotification);
-    }
-}
-
-void ServantEditor::promptNewProfile()
-{
-    nameDialog = std::make_unique<juce::AlertWindow> ("NEW PROFILE",
-        "Name it anything (\"Sabbath Rhythm\", \"My Snare\"). Then drop songs into its folder: isolated parts work best.", juce::MessageBoxIconType::NoIcon, this);
-    nameDialog->addTextEditor ("name", "", "Profile name");
-    nameDialog->addButton ("CREATE", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    nameDialog->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-    nameDialog->setColour (juce::AlertWindow::backgroundColourId, juce::Colour (0xff1a1411));
-    nameDialog->setColour (juce::AlertWindow::textColourId, pal::paint);
-    nameDialog->setColour (juce::AlertWindow::outlineColourId, pal::rust);
-    nameDialog->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int result)
-    {
-        if (result == 1 && nameDialog != nullptr)
-        {
-            const auto name = nameDialog->getTextEditorContents ("name");
-            if (proc.createProfileFolder (name))
-                svt::ProfileFolders::partsFolder().getChildFile (proc.getProfileName()).startAsProcess();
-            refreshProfileBox();
-        }
-        nameDialog.reset();
-    }), false);
-}
-
 void ServantEditor::updateStatus()
 {
     const auto stage = proc.getStage();
     const auto& a = proc.getAnalysis();
+    const bool linked = proc.getLink().masterNearby();
     juce::StringArray l; juce::Array<juce::Colour> c;
     auto add = [&] (const juce::String& s, juce::Colour col) { l.add (s); c.add (col); };
     auto mmss = [] (float s) { const int t = juce::roundToInt (s); return juce::String (t / 60) + ":" + juce::String (t % 60).paddedLeft ('0', 2); };
+    int nRes = 0; proc.getAppliedRes (nRes);
 
-    if (stage == ServantProcessor::Stage::listening)
+    if (! linked)
     {
-        analyzeButton.setButtonText ("FINISH");
-        analyzeButton.sub = "OR JUST STOP PLAYBACK";
+        analyzeButton.setButtonText ("WAITING");
+        analyzeButton.sub = "FOR THE MASTER ON THE MASTER BUS";
+        add ("AT YOUR SERVICE.", pal::signalHot);
+        add ("1. SET THIS TRACK'S ROLE (TOP RIGHT)", pal::paint);
+        add ("2. PUT THE MASTER LAST ON THE MASTER BUS", pal::paint);
+        add ("3. ITS MY PLUGINS MODE RUNS ME", pal::paint);
+    }
+    else if (stage == ServantProcessor::Stage::listening)
+    {
+        analyzeButton.setButtonText ("LISTENING");
+        analyzeButton.sub = "THE MASTER DECIDES AT PRESCRIBE";
         add ("LISTENING...  " + mmss (proc.getEngine().analyzer.learnedSeconds()), pal::signalHot);
         add ("PLAY THE WHOLE SONG.", pal::paint);
-        add ("SILENCE AND BLEED DON'T COUNT.", pal::paintDim);
-        add ("STOP PLAYBACK WHEN IT'S DONE.", pal::paintDim);
-    }
-    else if (stage == ServantProcessor::Stage::done)
-    {
-        analyzeButton.setButtonText ("RE-ANALYZE");
-        analyzeButton.sub = "AFTER AN EDIT OR A NEW COMP";
-        int nRes = 0; proc.getAppliedRes (nRes);
-        add ("ANALYSED " + mmss (a.seconds) + " OF AUDIO", pal::signalHot);
-        add (a.nTone == 0 ? "TONE: ALREADY IN RANGE"
-                          : "TONE: " + juce::String (a.nTone) + " MOVES  (OFF BY " + juce::String (a.excessBefore, 1) + " > " + juce::String (a.excessAfter, 1) + " dB)", pal::paint);
-        add (nRes == 0 ? "RESONANCES: NONE FOUND" : "RESONANCES: " + juce::String (nRes) + " FOUND", pal::paint);
-        add ("NEXT: PRINT THE TRACK, MOVE ME ON", pal::hazard);
+        add (a.valid ? "STILL USING: " + juce::String (nRes) + " RESONANCES, HPF " + juce::String (juce::roundToInt (proc.getCleanup().hpf)) + " HZ"
+                     : "SILENCE AND BLEED DON'T COUNT.", pal::paintDim);
+        add ("THEN PRESCRIBE ON THE MASTER", pal::hazard);
     }
     else
     {
-        analyzeButton.setButtonText ("ANALYZE");
-        analyzeButton.sub = "THEN PLAY THE WHOLE SONG";
-        add ("AT YOUR SERVICE.", pal::signalHot);
-        add ("1. PICK A PROFILE (OR MAKE ONE: NEW)", pal::paint);
-        add ("2. HIT ANALYZE, PLAY THE SONG", pal::paint);
-        add ("3. STOP. THE SERVANT DOES THE REST", pal::paint);
+        analyzeButton.setButtonText ("SERVED");
+        analyzeButton.sub = "RESET ON THE MASTER TO LISTEN AGAIN";
+        const auto& cl = proc.getCleanup();
+        add ("HEARD " + mmss (a.seconds) + " OF THIS TRACK", pal::signalHot);
+        add ("CLEAN-UP: " + juce::String (juce::roundToInt (cl.hpf)) + " HZ" + (cl.lpf < 19900.0f ? " TO " + juce::String (cl.lpf / 1000.0f, 1) + " KHZ" : juce::String (" UP")), pal::paint);
+        add (nRes == 0 ? "RESONANCES: NONE FOUND" : "RESONANCES: " + juce::String (nRes) + " FOUND", pal::paint);
+        add ("TONE, COMP, LEVEL: FROM THE MASTER", pal::hazard);
     }
-    // profile problems and background measuring take the last line
-    const auto measuring = proc.getMeasuring();
-    const auto* chosen = proc.getLibrary().find (proc.getProfileName());
-    if (measuring.isNotEmpty() && l.size() > 0) { l.set (l.size() - 1, "MEASURING " + measuring.toUpperCase()); c.set (c.size() - 1, pal::hazard); }
-    else if (chosen != nullptr && ! chosen->usable() && l.size() > 0)
-    {
-        l.set (l.size() - 1, "PROFILE IS EMPTY: HIT FOLDER, ADD SONGS"); c.set (c.size() - 1, pal::hazard);
-    }
-    analyzeButton.listening = stage == ServantProcessor::Stage::listening;
+    analyzeButton.listening = linked && stage == ServantProcessor::Stage::listening;
     if (l != status.lines) { status.lines = l; status.colours = c; status.repaint(); }
 }
 
@@ -998,13 +905,14 @@ void ServantEditor::timerCallback()
         const auto track = proc.getTrackName();
         juce::String t;
         if (! lk.masterNearby())
-            t = "Not linked. Put The Master last on your master bus: it hears the whole mix and can set this track's tone, compressor and trim (MY PLUGINS mode).";
+            t = "Not linked. The Servant works with The Master: put The Master last on your master bus and use its MY PLUGINS mode.";
         else
         {
             t = "LINKED TO THE MASTER" + (track.isNotEmpty() ? "  //  track: " + track : juce::String());
             const bool recent = lk.getLastNoteTime() > 0 && juce::Time::getMillisecondCounter() - lk.getLastNoteTime() < 60000;
             t << "\n" << (recent ? "Just set by The Master: tone EQ, compressor and trim. Override anything; your changes show gold."
-                                  : "Set the ROLE, then use MY PLUGINS on The Master. It decides this track's tone, compression and level from the whole mix.");
+                                  : "RESET on The Master starts the listening; PRESCRIBE decides this track's clean-up and resonances here, "
+                                    "and its tone, compression and level from the whole mix. APPLY sets them.");
         }
         linkLabel.setColour (juce::Label::textColourId, lk.masterNearby() ? pal::paint : pal::paintDim);
         linkLabel.setText (t, juce::dontSendNotification);
@@ -1017,11 +925,7 @@ void ServantEditor::timerCallback()
     if (std::abs (bell.glow - bellTarget) > 0.01f) { bell.glow += (bellTarget - bell.glow) * 0.3f; bell.repaint(); }
 
     updateStatus();
-    if (proc.analysisVersion.load() != lastVersion)
-    {
-        lastVersion = proc.analysisVersion.load();
-        refreshProfileBox();
-    }
+    if (proc.analysisVersion.load() != lastVersion) lastVersion = proc.analysisVersion.load();
 
     // knobs the user has turned since the analysis go gold; tone knobs are named after their frequency
     const auto params = proc.currentParams();
@@ -1173,14 +1077,11 @@ void ServantEditor::buildBackdrop()
         g.setColour (juce::Colours::black.withAlpha (0.7f)); g.fillRoundedRectangle (rr.toFloat().expanded (4.0f), 6.0f);
     }
     {   // MIX LINK: ROLE label
-        auto rl = tex::distressedText ("ROLE", 70, 18, tex::stencil (15.0f), pal::paint, juce::Justification::centredLeft, scale, 0.18f, 71, 0.12f);
-        g.setOpacity (1.0f);
-        g.drawImage (rl, juce::Rectangle<float> (30.0f, 731.0f, 70.0f, 18.0f));
         auto tl = tex::distressedText ("AFTER MATCH", 80, 12, tex::plainBold (8.5f), pal::paintDim, juce::Justification::centredLeft, scale, 0.15f, 72, 0.12f);
         g.drawImage (tl, juce::Rectangle<float> (818.0f, 724.0f, 80.0f, 12.0f));
     }
     {   // stamped hint under AMOUNT
-        auto h1 = tex::distressedText ("100% = THE PROFILE.", 150, 14, tex::stencil (12.5f), pal::signalHot.withAlpha (0.9f), juce::Justification::centred, scale, 0.18f, 61, 0.14f);
+        auto h1 = tex::distressedText ("100% = AS DECIDED.", 150, 14, tex::stencil (12.5f), pal::signalHot.withAlpha (0.9f), juce::Justification::centred, scale, 0.18f, 61, 0.14f);
         auto h2 = tex::distressedText ("TURN IT DOWN TO TASTE.", 150, 14, tex::plainBold (9.0f), pal::paint.withAlpha (0.75f), juce::Justification::centred, scale, 0.18f, 62, 0.14f);
         g.setOpacity (1.0f);
         g.drawImage (h1, juce::Rectangle<float> (26.0f, 644.0f, 150.0f, 14.0f));
@@ -1230,13 +1131,15 @@ void ServantEditor::buildBackdrop()
     g.setOpacity (1.0f); g.drawImage (l2, juce::Rectangle<float> (tx, badge.getY() + 38.0f, tw, 20.0f));
     g.drawImage (l3, juce::Rectangle<float> (tx + 1.0f, badge.getY() + 60.0f, tw, 14.0f));
 
-    auto sub = tex::distressedText ("SOUND-MATCHING TRACK ASSISTANT  //  V" + juce::String (JucePlugin_VersionString),
+    auto sub = tex::distressedText ("TRACK ASSISTANT TO THE MASTER  //  V" + juce::String (JucePlugin_VersionString),
                                     400, 14, tex::plainBold (10.5f), pal::paintDim, juce::Justification::centredLeft, scale, 0.15f, 99, 0.14f);
     g.setOpacity (1.0f);
     g.drawImage (sub, juce::Rectangle<float> (116.0f, 86.0f, 400.0f, 14.0f));
 
-    auto pl = tex::distressedText ("PROFILE", 120, 16, tex::stencil (14.0f), pal::paint, juce::Justification::centredLeft, scale, 0.2f, 7, 0.15f);
-    g.drawImage (pl, juce::Rectangle<float> ((float) profileArea.getX() + 2, (float) profileArea.getY() + 2, 120.0f, 16.0f));
+    auto pl = tex::distressedText ("ROLE", 120, 16, tex::stencil (14.0f), pal::paint, juce::Justification::centredLeft, scale, 0.2f, 7, 0.15f);
+    g.drawImage (pl, juce::Rectangle<float> ((float) roleArea.getX() + 2, (float) roleArea.getY() + 2, 120.0f, 16.0f));
+    auto rh = tex::distressedText ("WHAT THIS TRACK DOES IN THE SONG", 200, 12, tex::plainBold (8.5f), pal::paintDim, juce::Justification::centredLeft, scale, 0.15f, 8, 0.12f);
+    g.drawImage (rh, juce::Rectangle<float> ((float) roleArea.getX() + 2, (float) roleArea.getY() + 58, 200.0f, 12.0f));
 
     // the logo: THE SERVANT in rusty red, over a tarnished serving-tray rule
     {

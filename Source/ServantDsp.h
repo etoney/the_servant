@@ -425,6 +425,18 @@ public:
         preparedRate = sampleRate;
     }
     void requestReset() { resetRequested.store (true); }
+    // the clean-up filters just changed: rescale what was measured so far as if they'd always been
+    // like this (message thread; dB per band)
+    void requestScale (const std::array<float, kBands>& db)
+    {
+        for (int b = 0; b < kBands; ++b)
+        {
+            const double s = std::pow (10.0, db[(size_t) b] / 10.0);
+            pendingScale[(size_t) b].store (s);
+            out[(size_t) b].store (out[(size_t) b].load() * s);
+        }
+        scaleRequested.store (true);
+    }
 
     // audio thread (the processed, trimmed output)
     void process (const float* L, const float* R, int n) noexcept
@@ -434,6 +446,13 @@ public:
             for (auto& v : acc) v = 0;
             total = 0; count = 0; peak = 0; active = 0;
             for (int b = 0; b < kBands; ++b) { hp[b].reset(); lp[b].reset(); }
+            scaleRequested.store (false);
+        }
+        if (scaleRequested.exchange (false))
+        {
+            double before = 0, after = 0;
+            for (int b = 0; b < kBands; ++b) { before += acc[(size_t) b]; acc[(size_t) b] *= pendingScale[(size_t) b].load(); after += acc[(size_t) b]; }
+            if (before > 0) total *= after / before;
         }
         double blockPow = 0;
         for (int i = 0; i < n; ++i)
@@ -477,7 +496,8 @@ private:
     double total = 0, sr = 48000.0, preparedRate = 0;
     juce::int64 count = 0, active = 0;
     float peak = 0;
-    std::atomic<bool> resetRequested { true };
+    std::atomic<bool> resetRequested { true }, scaleRequested { false };
+    std::array<std::atomic<double>, kBands> pendingScale {};
 };
 
 struct Params
