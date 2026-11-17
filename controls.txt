@@ -86,9 +86,18 @@ THE KNOBS
                track is and sets FREQ just under where its "s" sounds sit;
                The Master turns the de-esser on (usually on the lead vocal)
                and sets AMOUNT. The readout shows how much it is cutting.
-  COMPRESSOR   ON + AMOUNT. The threshold follows the track's own level and
-               it uses the 5 ms look-ahead, so hits are caught early. The
-               Master turns it on for the tracks that make the mix's peaks.
+  COMPRESSOR   ON + STYLE + AMOUNT. The threshold follows the track's own
+               level, so AMOUNT works the same on a quiet or a hot track.
+               STYLE (AUTO follows the ROLE; pick one to override):
+                 PUNCH   kick, snare, drums: slower attack, so each hit's
+                         crack gets through, then the body is held
+                 SMOOTH  lead: catches the loud words early (look-ahead)
+                         and lets go slowly, like vocal levelling
+                 TIGHT   bass: firmer, every note at the same level
+                 GLUE    everything else: gentle, slow, low ratio
+               The readout shows the style and how many dB it's taking off.
+               The Master turns it on for the tracks that make the mix's
+               peaks (and a lead that jumps around) and leaves STYLE alone.
   TRANSIENTS   ON + ATTACK + SUSTAIN (-100 to +100% each).
                ATTACK: more (+) or less (-) of the first few ms of each hit.
                  + makes drums snap and picking cut through; - softens

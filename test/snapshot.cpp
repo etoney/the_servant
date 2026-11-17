@@ -300,9 +300,14 @@ int main (int argc, char** argv)
         };
         for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (p, id, 0);
         const auto dry = render (p, hit, 6.0, 2.0);
-        setP (p, "compOn", 1); setP (p, "comp", 70);
+        setP (p, "compOn", 1); setP (p, "comp", 70); setP (p, "compStyle", 3);   // TIGHT
         const auto comp = render (p, hit, 6.0, 2.0);
-        check (spread (comp) < spread (dry) - 3.0f && spread (comp) > 0.5f, juce::String::formatted ("COMPRESSOR evens out loud and soft hits (%.1f -> %.1f dB apart)", spread (dry), spread (comp)));
+        check (spread (comp) < spread (dry) - 3.0f && spread (comp) > 0.5f, juce::String::formatted ("COMPRESSOR (TIGHT) evens out loud and soft hits (%.1f -> %.1f dB apart)", spread (dry), spread (comp)));
+        setP (p, "compStyle", 4);   // GLUE
+        const auto glue = render (p, hit, 6.0, 2.0);
+        const double rD = rmsDb (dry.l), rG = rmsDb (glue.l), rT = rmsDb (comp.l);
+        check (rG < rD - 0.3 && rG > rT + 1.0, juce::String::formatted ("GLUE is gentler: %.1f dB of overall reduction (TIGHT %.1f)", rD - rG, rD - rT));
+        setP (p, "compStyle", 0);
         setP (p, "compOn", 0); setP (p, "match", 1); setP (p, "trim", -6.0f);
         const auto trimmed = render (p, hit, 6.0, 2.0);
         check (std::abs ((rmsDb (trimmed.l) - rmsDb (dry.l)) + 6.0) < 0.5, juce::String::formatted ("TRIM -6 dB really lowers the track, even with MATCH on (%+.2f dB)", rmsDb (trimmed.l) - rmsDb (dry.l)));
@@ -438,6 +443,39 @@ int main (int argc, char** argv)
         g.getEngine().sib.read (p50, p95, perMin, secs);
         std::cout << "       guitar sibilance: p50 " << p50 << " p95 " << p95 << " dB, " << perMin << "/min" << std::endl;
         check (p95 - p50 < 8.0f || p95 < -9.0f, "a distorted guitar doesn't read as sibilant");
+    }
+
+    //==== COMPRESSOR STYLES: AUTO follows the ROLE; PUNCH lets the crack through, SMOOTH doesn't
+    {
+        ServantProcessor p;
+        bool autoOk = true;
+        const int expect[8] = { 1, 3, 2, 0, 0, 0, 3, 3 };   // Lead, Rhythm, Bass, Kick, Snare, Drums, Keys, Other
+        for (int r = 0; r < 8; ++r) { setP (p, "role", (float) r); autoOk = autoOk && p.currentParams().compStyle == expect[r]; }
+        setP (p, "compStyle", 2); setP (p, "role", 3.0f);
+        check (autoOk && p.currentParams().compStyle == 1, "AUTO style by role (kick/snare/drums PUNCH, lead SMOOTH, bass TIGHT, the rest GLUE); a picked style wins");
+        auto drum = [] (int64_t n, int)
+        {
+            const double t = (double) n / 48000.0, th = std::fmod (t, 0.5);
+            uint32_t z = (uint32_t) n * 2654435761u; z ^= z >> 15; z *= 2246822519u; z ^= z >> 13;
+            const double nz = (double) (z & 0xffff) / 32768.0 - 1.0;
+            return (float) (0.5 * std::exp (-th * 60.0) * nz + 0.3 * std::exp (-th * 7.0) * std::sin (juce::MathConstants<double>::twoPi * 180.0 * th));
+        };
+        for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (p, id, 0);
+        const int lat = 240;
+        auto part = [&] (const Render& r, double a, double b)
+        {
+            double e = 0; int c = 0;
+            for (double h = 2.0; h < 7.5; h += 0.5)
+                for (int i = (int) ((h + a) * 48000.0); i < (int) ((h + b) * 48000.0); ++i) { const float y = r.l[(size_t) (i + lat)]; e += (double) y * y; ++c; }
+            return 10.0 * std::log10 (e / std::max (1, c) + 1e-20);
+        };
+        const auto dry = render (p, drum, 8.0, 0.0);
+        auto withStyle = [&] (float st) { setP (p, "compOn", 1); setP (p, "comp", 80); setP (p, "compStyle", st); auto r = render (p, drum, 8.0, 0.0); setP (p, "compOn", 0); return r; };
+        const auto punch = withStyle (1), smooth = withStyle (2);
+        // how much the crack (first 6 ms) stands out of the body (30-100 ms), before and after
+        const double c0 = part (dry, 0, 0.006) - part (dry, 0.03, 0.1);
+        const double cP = part (punch, 0, 0.006) - part (punch, 0.03, 0.1), cS = part (smooth, 0, 0.006) - part (smooth, 0.03, 0.1);
+        check (cP > cS + 2.0 && cP > c0 - 2.0, juce::String::formatted ("PUNCH keeps the crack over the body (%.1f dB, dry %.1f), SMOOTH flattens it (%.1f dB)", cP, c0, cS));
     }
 
     //==== TRANSIENTS: a drum hit every half second (a noisy crack over a ringing body) and a steady pad

@@ -508,6 +508,7 @@ struct Params
     bool toneOn = true;   ToneBand tone[kTone];
     bool match = true, compare = false;
     bool compOn = false; float comp = 0.0f;   // 0..1: program-dependent compressor (set by The Master, or by hand)
+    int compStyle = 3;                        // 0 PUNCH, 1 SMOOTH, 2 TIGHT, 3 GLUE (resolved from the ROLE when on AUTO)
     float trimDb = 0.0f;                      // output trim AFTER match, so it really changes the track's level in the mix
     bool deessOn = false; float deess = 0.4f, deessHz = 6500.0f;   // split-band de-esser: amount 0..1, split frequency
     bool transOn = false; float transAtk = 0.0f, transSus = 0.0f;  // transient shaper: -1..+1 each (more / less attack, longer / shorter tails)
@@ -559,6 +560,23 @@ struct SibStats
     }
 };
 
+// The compressor's character. Same AMOUNT knob; the style decides how it reacts.
+struct CompStyle { float atkMs, relMs, ratioBase, ratioAmt, kneeDb, rmsMs; bool lookahead; float thrOff; const char* name; };
+inline const CompStyle& compStyle (int i)
+{
+    static const CompStyle s[4] = {
+        { 15.0f,  80.0f, 3.0f, 2.0f, 0.0f,  0.0f, false,  8.0f, "PUNCH"  },   // lets each hit's crack through, then holds the body
+        {  3.0f, 250.0f, 2.0f, 2.0f, 6.0f, 10.0f, true,  10.0f, "SMOOTH" },   // vocal levelling: catches early, lets go slowly
+        {  6.0f, 150.0f, 3.0f, 3.0f, 3.0f,  5.0f, true,  10.0f, "TIGHT"  },   // every note at the same level (bass)
+        { 25.0f, 300.0f, 1.5f, 1.5f, 6.0f, 30.0f, false, 10.0f, "GLUE"   } }; // gentle, slow, low ratio
+    return s[juce::jlimit (0, 3, i)];
+}
+// AUTO: the style for a ROLE (Lead, Rhythm, Bass, Kick, Snare, Drums, Keys / Pads, Other)
+inline int compStyleForRole (int role)
+{
+    switch (role) { case 0: return 1; case 2: return 2; case 3: case 4: case 5: return 0; default: return 3; }
+}
+
 class Engine
 {
 public:
@@ -576,7 +594,8 @@ public:
         for (auto& b : tone) b.reset();
         for (int i = 0; i < kMaxRes; ++i) { narrow[i].reset(); broad[i].reset(); cut[i].reset(); cut[i].bypass(); envN[i] = envB[i] = 1e-9f; grSm[i] = 0; }
         inPow = outPow = 1e-6f; matchGain = 1.0f;
-        compEnv = 0; compLvl = 1e-4f; compGr = 0; trimGain = 1.0f;
+        compEnv = 0; compLvl = 1e-4f; compGr = 0; compRms = 0; trimGain = 1.0f;
+        compDelay.assign ((size_t) (look + 1), 1.0f); compDpos = 0;
         deEnvS = deEnvF = 1e-9f; deGr = 0; deWinMax = -100; deWinN = 0; deWinAct = false; deHzCached = -1; deHp.reset(); deLp.reset(); deLp2.reset();
         tsF = tsS = tsA = tsB = 1e-9f; tsGain = 1.0f; tsWinMax = 0; tsWinN = 0; tsWinAct = false;
         cached = {}; cachedValid = false; resVersionSeen = -1;
@@ -619,9 +638,11 @@ public:
         const float smA = 1.0f - std::exp (-1.0f / (0.05f * (float) sr));
         // compressor: threshold rides the track's own level (3 s), so COMP works the same on a quiet or a hot track
         const float cAmt = p.compOn ? juce::jlimit (0.0f, 1.0f, p.comp) * std::min (1.0f, p.amount) : 0.0f;
-        const float cRatio = 1.5f + 2.5f * cAmt;
+        const auto& cs = compStyle (p.compStyle);
+        const float cRatio = cs.ratioBase + cs.ratioAmt * cAmt;
         const float cEnvA = std::exp (-1.0f / (0.06f * (float) sr));    // peak hold decay
-        const float cAtk = 1.0f - std::exp (-1.0f / (0.0015f * (float) sr)), cRel = 1.0f - std::exp (-1.0f / (0.12f * (float) sr));
+        const float cAtk = 1.0f - std::exp (-1.0f / (0.001f * cs.atkMs * (float) sr)), cRel = 1.0f - std::exp (-1.0f / (0.001f * cs.relMs * (float) sr));
+        const float cRmsA = cs.rmsMs > 0 ? 1.0f - std::exp (-1.0f / (0.001f * cs.rmsMs * (float) sr)) : 0.0f;
         const float cLvlA = 1.0f - std::exp (-1.0f / (3.0f * (float) sr));
         const float trimTarget = juce::Decibels::decibelsToGain (juce::jlimit (-24.0f, 12.0f, p.trimDb));
         // de-esser: the energy above the split vs the whole signal; an "s" pushes it up toward 0 dB
@@ -660,12 +681,22 @@ public:
                     const float ms = 0.5f * (dry0 * dry0 + dry1 * dry1);
                     const float pk = std::max (std::abs (dry0), std::abs (dry1));
                     compEnv = std::max (pk * pk, compEnv * cEnvA);
+                    compRms += cRmsA * (ms - compRms);
                     if (ms > 1e-8f) compLvl += cLvlA * (ms - compLvl);
-                    const float envDb = 10.0f * std::log10 (compEnv + 1e-12f);
-                    const float thr = 10.0f * std::log10 (compLvl + 1e-12f) + 10.0f - 10.0f * cAmt;
-                    const float want = cAmt > 0.0f ? std::max (0.0f, envDb - thr) * (1.0f - 1.0f / cRatio) : 0.0f;
+                    const float envDb = 10.0f * std::log10 ((cs.rmsMs > 0 ? compRms * 2.0f : compEnv) + 1e-12f);   // RMS of a sine reads 3 dB under its peak
+                    const float thr = 10.0f * std::log10 (compLvl + 1e-12f) + cs.thrOff - 10.0f * cAmt;
+                    float over = envDb - thr;
+                    if (cs.kneeDb > 0.0f && std::abs (over) < cs.kneeDb * 0.5f) over = (over + cs.kneeDb * 0.5f) * (over + cs.kneeDb * 0.5f) / (2.0f * cs.kneeDb);
+                    const float want = cAmt > 0.0f ? std::max (0.0f, over) * (1.0f - 1.0f / cRatio) : 0.0f;
                     compGr += (want > compGr ? cAtk : cRel) * (want - compGr);
-                    compBuf[s - s0] = juce::Decibels::decibelsToGain (-compGr);
+                    float gnow = juce::Decibels::decibelsToGain (-compGr);
+                    if (! cs.lookahead)
+                    {   // no head start: the gain lines up with the audio, so the attack of each hit gets through
+                        compDelay[(size_t) compDpos] = gnow;
+                        compDpos = (compDpos + 1) % (look + 1);
+                        gnow = compDelay[(size_t) compDpos];
+                    }
+                    compBuf[s - s0] = gnow;
                 }
                 else compBuf[s - s0] = 1.0f;
                 if (p.cleanOn)
@@ -837,7 +868,9 @@ private:
     bool hpfOn = true, lpfOn = true, toneActive[kTone] {};
     float envN[kMaxRes] {}, envB[kMaxRes] {}, grSm[kMaxRes] {}, dRef[kMaxRes] {};
     float inPow = 1e-6f, outPow = 1e-6f, matchGain = 1.0f;
-    float compEnv = 0, compLvl = 1e-4f, compGr = 0, trimGain = 1.0f;
+    float compEnv = 0, compLvl = 1e-4f, compGr = 0, compRms = 0, trimGain = 1.0f;
+    std::vector<float> compDelay = std::vector<float> (241, 1.0f);
+    int compDpos = 0;
     float compBuf[16] {};
     Params cached; bool cachedValid = false; float cachedQ = -1;
 

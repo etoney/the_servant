@@ -112,6 +112,10 @@ private:
     juce::ComboBox roleBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
     juce::ToggleButton compOn { "ON" };
+    juce::ComboBox compStyleBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> compStyleAtt;
+    juce::Label compRead;
+    float compGrShown = 0.0f;
     juce::Label linkLabel;
     int linkTick = 0;
     Knob *amountKnob = nullptr, *hpfKnob = nullptr, *lpfKnob = nullptr, *depthKnob = nullptr, *sharpKnob = nullptr, *speedKnob = nullptr;

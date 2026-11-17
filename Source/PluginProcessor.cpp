@@ -16,7 +16,7 @@ ServantProcessor::ServantProcessor()
         for (auto* w : { "f", "g", "q" }) apvts.addParameterListener (toneId (w, i), this);
     for (auto* id : { "hpf", "lpf", "role", "deessHz" }) apvts.addParameterListener (id, this);
 
-    juce::StringArray linkIds { "amount", "toneOn", "compOn", "comp", "trim", "role", "match", "hpf", "lpf", "deessOn", "deess", "deessHz", "transOn", "transAtk", "transSus" };
+    juce::StringArray linkIds { "amount", "toneOn", "compOn", "comp", "trim", "role", "match", "hpf", "lpf", "deessOn", "deess", "deessHz", "transOn", "transAtk", "transSus", "compStyle" };
     for (int i = 0; i < svt::kTone; ++i) for (auto* w : { "f", "g", "q" }) linkIds.add (toneId (w, i));
     link = std::make_unique<Link> ("servant", "The Servant", JucePlugin_VersionString, apvts, linkIds);
     link->onBeforeSet = [this] { applying = true; };          // The Master's settings aren't "your" overrides
@@ -125,6 +125,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayo
     p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "role", 1 }, "Role", roleNames(), 7));
     p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "compOn", 1 }, "Compressor On", false));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "comp", 1 }, "Compressor", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, pctAttr));
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "compStyle", 1 }, "Compressor Style", StringArray { "Auto (by role)", "Punch", "Smooth", "Tight", "Glue" }, 0));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "trim", 1 }, "Trim", NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f, dbAttr));
     p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "deessOn", 1 }, "De-Esser On", false));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "deess", 1 }, "De-Esser", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 40.0f, pctAttr));
@@ -156,6 +157,10 @@ svt::Params ServantProcessor::currentParams() const
     p.compare = v ("compare") > 0.5f;
     p.compOn = v ("compOn") > 0.5f;
     p.comp = v ("comp") * 0.01f;
+    {
+        const int st = (int) v ("compStyle");
+        p.compStyle = st == 0 ? svt::compStyleForRole ((int) v ("role")) : st - 1;
+    }
     p.trimDb = v ("trim");
     p.deessOn = v ("deessOn") > 0.5f;
     p.deess = v ("deess") * 0.01f;

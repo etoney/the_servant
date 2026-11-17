@@ -772,6 +772,16 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     transMove.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (transMove);
     compOn.setTooltip ("Compressor on/off.");
+    compStyleBox.addItemList ({ "AUTO", "PUNCH", "SMOOTH", "TIGHT", "GLUE" }, 1);
+    compStyleBox.setTooltip ("How the compressor reacts. AUTO follows the ROLE: PUNCH for kick, snare and drums (lets each hit's crack through, then holds the body), "
+                             "SMOOTH for the lead (vocal levelling: catches early, lets go slowly), TIGHT for bass (every note at the same level), GLUE for everything else (gentle).");
+    compStyleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, "compStyle", compStyleBox);
+    addAndMakeVisible (compStyleBox);
+    compRead.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::bold)));
+    compRead.setColour (juce::Label::textColourId, pal::paintDim);
+    compRead.setJustificationType (juce::Justification::centred);
+    compRead.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (compRead);
     buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
     addAndMakeVisible (compOn);
     roleBox.addItemList (ServantProcessor::roleNames(), 1);
@@ -874,7 +884,9 @@ void ServantEditor::resized()
     placeKnob (*deessKnob, { 362, 712, 84, 110 });
     placeKnob (*deessHzKnob, { 446, 712, 84, 110 });
     plates.push_back ({ "COMPRESSOR", { 546, 698, 172, 130 } });
-    compOn.setBounds (556, 728, 70, 30);
+    compOn.setBounds (556, 724, 70, 28);
+    compStyleBox.setBounds (556, 758, 70, 22);
+    compRead.setBounds (552, 784, 78, 34);
     placeKnob (*compKnob, { 630, 724, 84, 100 });
     plates.push_back ({ "TRANSIENTS", { 728, 698, 214, 130 } });
     transOn.setBounds (738, 728, 62, 30);
@@ -988,6 +1000,14 @@ void ServantEditor::timerCallback()
         if ((bool) deessHzKnob->slider.getProperties()["gold"] != gold) { deessHzKnob->slider.getProperties().set ("gold", gold); deessHzKnob->slider.repaint(); }
     }
     for (auto* k : { transAtkKnob, transSusKnob }) k->slider.setEnabled (params.transOn);
+    {
+        const float gr = proc.getEngine().compGrDb.exchange (0.0f);
+        compGrShown = std::max (gr, compGrShown * 0.9f);
+        const juce::String style = svt::compStyle (params.compStyle).name;
+        const auto t = ! params.compOn ? juce::String ("OFF") : style + "\n-" + juce::String (compGrShown, 1) + " dB";
+        if (compRead.getText() != t) compRead.setText (t, juce::dontSendNotification);
+        compRead.setColour (juce::Label::textColourId, compGrShown > 0.5f ? pal::signalHot : pal::paintDim);
+    }
     {
         const float mv = proc.getEngine().tsDb.exchange (0.0f);
         transShown = std::abs (mv) > std::abs (transShown) * 0.9f ? mv : transShown * 0.9f;
