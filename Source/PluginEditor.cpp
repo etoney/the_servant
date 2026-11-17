@@ -784,9 +784,13 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     addAndMakeVisible (compRead);
     buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
     addAndMakeVisible (compOn);
-    roleBox.addItemList (ServantProcessor::roleNames(), 1);
-    roleBox.setTooltip ("What this track does in the song. The Master balances the mix by it (the LEAD stays on top, KICK and BASS own the low end), and The Servant picks its clean-up by it.");
-    roleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, "role", roleBox);
+    for (int idx : svt::roleMenuOrder()) roleBox.addItem (ServantProcessor::roleNames()[idx], idx + 1);   // item id = parameter index + 1
+    roleBox.setTooltip ("What this track is in the song. The Master balances the mix by it (the lead vocal and lead guitar stay on top, "
+                        "backing vocals sit under the lead, kick and bass own the low end), and The Servant picks its clean-up by it.");
+    roleAtt = std::make_unique<juce::ParameterAttachment> (*p.apvts.getParameter ("role"),
+                                                           [this] (float v) { roleBox.setSelectedId (juce::roundToInt (v) + 1, juce::dontSendNotification); });
+    roleBox.onChange = [this] { if (roleBox.getSelectedId() > 0) roleAtt->setValueAsCompleteGesture ((float) (roleBox.getSelectedId() - 1)); };
+    roleAtt->sendInitialUpdate();
     addAndMakeVisible (roleBox);
     linkLabel.setFont (juce::Font (juce::FontOptions (12.5f)));
     linkLabel.setColour (juce::Label::textColourId, pal::paint);

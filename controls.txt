@@ -14,8 +14,8 @@ It needs The Master. Without it, it waits (and passes your track through).
 THE WORKFLOW (all from The Master)
 -------------------------------------------------------------------------------
   1. Put The Servant on every track you want balanced, and set each one's
-     ROLE (top right): Lead, Rhythm, Bass, Kick, Snare, Drums, Keys / Pads,
-     Other.
+     ROLE (top right): Lead Vocal, Backing Vocals, Lead Guitar, Rhythm
+     Guitar, Bass, Kick, Snare, Drums, Keys / Pads, Other.
   2. Put The Master last on the master bus. Each Servant links by itself.
   3. On The Master press RESET and play the whole song. Every Servant listens
      to its own track at the same time.
@@ -34,10 +34,11 @@ WHO DECIDES WHAT
 -------------------------------------------------------------------------------
   The Servant (from this track + ROLE):
     HIGH-PASS   from where the track's content really starts, within the
-                range for its role (a lead never below 90 Hz, kick and bass
-                keep their lows).
-    LOW-PASS    for rhythm parts only: rolls off the fizz above where the
-                content ends (8-12 kHz). Other roles: OFF.
+                range for its role (a lead vocal never below 90 Hz, backing
+                vocals 100-200 Hz, guitars 70-160 Hz, kick and bass keep
+                their lows).
+    LOW-PASS    for guitars only: rolls off the fizz above where the notes
+                end (rhythm 8-12 kHz, lead 10-14 kHz). Other roles: OFF.
     RESONANCES  up to 12 frequencies that ring, ducked only while they ring.
     DE-ESSER FREQ  just under where the track's "s" sounds sit.
   The Master (from the whole mix + genre):
@@ -91,8 +92,9 @@ THE KNOBS
                STYLE (AUTO follows the ROLE; pick one to override):
                  PUNCH   kick, snare, drums: slower attack, so each hit's
                          crack gets through, then the body is held
-                 SMOOTH  lead: catches the loud words early (look-ahead)
-                         and lets go slowly, like vocal levelling
+                 SMOOTH  lead vocal, backing vocals, lead guitar: catches
+                         the loud words or notes early (look-ahead) and
+                         lets go slowly, like vocal levelling
                  TIGHT   bass: firmer, every note at the same level
                  GLUE    everything else: gentle, slow, low ratio
                The readout shows the style and how many dB it's taking off.

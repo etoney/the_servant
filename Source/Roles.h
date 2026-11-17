@@ -9,6 +9,7 @@
 
 namespace svt
 {
+constexpr int kNumRoles = 10;
 // what decide() needs; with no boost / cut allowance it makes no tone moves (The Master does those)
 struct RoleProfile
 {
@@ -17,7 +18,9 @@ struct RoleProfile
     RoleProfile() { for (auto& t : tol) t = 3.0f; }
 };
 
-// ROLE order matches the "role" parameter
+// ROLE order matches the "role" parameter. The first eight keep their places (saved projects store
+// the index): Lead became Lead Vocal and Rhythm became Rhythm Guitar; Lead Guitar and Backing Vocals
+// were added at the end. The menu shows them in a friendlier order (roleMenuOrder).
 struct RoleRules
 {
     const char* name;
@@ -29,15 +32,24 @@ struct RoleRules
 inline const RoleRules& roleRules (int role)
 {
     static const RoleRules r[] = {
-        { "Lead",        90.0f, 180.0f, 20000.0f, 20000.0f, 3.0f },
-        { "Rhythm",      70.0f, 160.0f, 12000.0f,  8000.0f, 3.0f },
+        { "Lead Vocal",  90.0f, 180.0f, 20000.0f, 20000.0f, 3.0f },
+        { "Rhythm Guitar", 70.0f, 160.0f, 12000.0f,  8000.0f, 3.0f },
         { "Bass",        30.0f,  45.0f, 20000.0f, 20000.0f, 4.0f },
         { "Kick",        30.0f,  40.0f, 20000.0f, 20000.0f, 4.5f },
         { "Snare",       70.0f, 140.0f, 20000.0f, 20000.0f, 3.0f },
         { "Drums",       30.0f,  40.0f, 20000.0f, 20000.0f, 4.5f },
         { "Keys / Pads", 40.0f, 120.0f, 20000.0f, 20000.0f, 3.5f },
-        { "Other",       30.0f,  80.0f, 20000.0f, 20000.0f, 3.5f } };
-    return r[juce::jlimit (0, 7, role)];
+        { "Other",       30.0f,  80.0f, 20000.0f, 20000.0f, 3.5f },
+        { "Lead Guitar", 70.0f, 160.0f, 14000.0f, 10000.0f, 3.0f },   // keeps the low E; trims fizz above the notes
+        { "Backing Vocals", 100.0f, 200.0f, 20000.0f, 20000.0f, 3.0f } };   // a little more low cut than the lead
+    return r[juce::jlimit (0, kNumRoles - 1, role)];
+}
+
+// the order the ROLE menu lists them in (parameter indices)
+inline const std::array<int, kNumRoles>& roleMenuOrder()
+{
+    static const std::array<int, kNumRoles> o { 0, 9, 8, 1, 2, 3, 4, 5, 6, 7 };   // vocals, guitars, bass, drums, keys, other
+    return o;
 }
 
 struct Cleanup { float hpf = 80.0f, lpf = 20000.0f, resTol = 3.0f; juce::String why; };

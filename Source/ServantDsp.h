@@ -571,10 +571,11 @@ inline const CompStyle& compStyle (int i)
         { 25.0f, 300.0f, 1.5f, 1.5f, 6.0f, 30.0f, false, 10.0f, "GLUE"   } }; // gentle, slow, low ratio
     return s[juce::jlimit (0, 3, i)];
 }
-// AUTO: the style for a ROLE (Lead, Rhythm, Bass, Kick, Snare, Drums, Keys / Pads, Other)
+// AUTO: the style for a ROLE (Lead Vocal, Rhythm Guitar, Bass, Kick, Snare, Drums, Keys / Pads, Other,
+// Lead Guitar, Backing Vocals): SMOOTH for leads and voices, TIGHT for bass, PUNCH for drums, GLUE otherwise
 inline int compStyleForRole (int role)
 {
-    switch (role) { case 0: return 1; case 2: return 2; case 3: case 4: case 5: return 0; default: return 3; }
+    switch (role) { case 0: case 8: case 9: return 1; case 2: return 2; case 3: case 4: case 5: return 0; default: return 3; }
 }
 
 class Engine

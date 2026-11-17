@@ -110,7 +110,7 @@ private:
     juce::Label deessGr;
     float deessGrShown = 0.0f;
     juce::ComboBox roleBox;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
+    std::unique_ptr<juce::ParameterAttachment> roleAtt;   // menu order differs from the parameter order
     juce::ToggleButton compOn { "ON" };
     juce::ComboBox compStyleBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> compStyleAtt;

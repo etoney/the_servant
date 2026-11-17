@@ -208,7 +208,7 @@ void ServantProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
 const juce::StringArray& ServantProcessor::roleNames()
 {
-    static const juce::StringArray r { "Lead", "Rhythm", "Bass", "Kick", "Snare", "Drums", "Keys / Pads", "Other" };
+    static const juce::StringArray r { "Lead Vocal", "Rhythm Guitar", "Bass", "Kick", "Snare", "Drums", "Keys / Pads", "Other", "Lead Guitar", "Backing Vocals" };
     return r;
 }
 

@@ -335,7 +335,7 @@ int main (int argc, char** argv)
         for (int i = 0; i < 30 && ! master.isOnline(); ++i) pump (50);
         pump (1600);
         const auto ex = lastStatus.getProperty ("extra", {});
-        check (ex.getProperty ("role", "").toString() == "Rhythm" && ex.getProperty ("bandPow", {}).getArray() != nullptr
+        check (ex.getProperty ("role", "").toString() == "Rhythm Guitar" && ex.getProperty ("bandPow", {}).getArray() != nullptr
                && ex.getProperty ("bandPow", {}).getArray()->size() == 10, "The Servant reports its role and its 10-band energy over the link");
         auto set = cdlink::Endpoint::makeMessage ("set");
         auto* prm = new juce::DynamicObject();
@@ -449,8 +449,8 @@ int main (int argc, char** argv)
     {
         ServantProcessor p;
         bool autoOk = true;
-        const int expect[8] = { 1, 3, 2, 0, 0, 0, 3, 3 };   // Lead, Rhythm, Bass, Kick, Snare, Drums, Keys, Other
-        for (int r = 0; r < 8; ++r) { setP (p, "role", (float) r); autoOk = autoOk && p.currentParams().compStyle == expect[r]; }
+        const int expect[10] = { 1, 3, 2, 0, 0, 0, 3, 3, 1, 1 };   // Lead Vocal, Rhythm Guitar, Bass, Kick, Snare, Drums, Keys, Other, Lead Guitar, Backing Vocals
+        for (int r = 0; r < 10; ++r) { setP (p, "role", (float) r); autoOk = autoOk && p.currentParams().compStyle == expect[r]; }
         setP (p, "compStyle", 2); setP (p, "role", 3.0f);
         check (autoOk && p.currentParams().compStyle == 1, "AUTO style by role (kick/snare/drums PUNCH, lead SMOOTH, bass TIGHT, the rest GLUE); a picked style wins");
         auto drum = [] (int64_t n, int)
