@@ -510,6 +510,30 @@ struct Params
     bool compOn = false; float comp = 0.0f;   // 0..1: program-dependent compressor (set by The Master, or by hand)
     float trimDb = 0.0f;                      // output trim AFTER match, so it really changes the track's level in the mix
     bool deessOn = false; float deess = 0.4f, deessHz = 6500.0f;   // split-band de-esser: amount 0..1, split frequency
+    bool transOn = false; float transAtk = 0.0f, transSus = 0.0f;  // transient shaper: -1..+1 each (more / less attack, longer / shorter tails)
+};
+
+// How hard the track's hits stick out of its own body, for The Master: every 10 ms, the most the fast
+// envelope rose over the slow one (dB). Steady pads sit near 0; a snare or a picked note jumps 10-20 dB.
+struct TransStats
+{
+    static constexpr int kBins = 80;   // 0 .. 40 dB in 0.5 dB steps
+    std::array<std::atomic<int>, kBins> hist {};
+    std::atomic<bool> resetRequested { false };
+    void add (float d) { ++hist[(size_t) juce::jlimit (0, kBins - 1, (int) (d * 2.0f))]; }
+    // message thread: { p95, seconds }
+    void read (float& p95, float& seconds) const
+    {
+        int total = 0;
+        for (auto& h : hist) total += h.load();
+        seconds = total * 0.01f;
+        p95 = 0.0f;
+        if (total == 0) return;
+        const int need = (int) std::ceil (0.95 * total);
+        int acc = 0;
+        for (int b = 0; b < kBins; ++b) { acc += hist[(size_t) b].load(); if (acc >= std::max (1, need)) { p95 = (b + 0.5f) * 0.5f; return; } }
+        p95 = 40.0f;
+    }
 };
 
 // How sibilant the track is, for The Master: every 10 ms, how far the energy above the de-esser's
@@ -554,6 +578,7 @@ public:
         inPow = outPow = 1e-6f; matchGain = 1.0f;
         compEnv = 0; compLvl = 1e-4f; compGr = 0; trimGain = 1.0f;
         deEnvS = deEnvF = 1e-9f; deGr = 0; deWinMax = -100; deWinN = 0; deWinAct = false; deHzCached = -1; deHp.reset(); deLp.reset(); deLp2.reset();
+        tsF = tsS = tsA = tsB = 1e-9f; tsGain = 1.0f; tsWinMax = 0; tsWinN = 0; tsWinAct = false;
         cached = {}; cachedValid = false; resVersionSeen = -1;
         juce::ignoreUnused (maxBlock);
     }
@@ -572,6 +597,8 @@ public:
     std::atomic<float> inPeak { 0 }, outPeak { 0 }, matchDb { 0 };
     SibStats sib;
     std::atomic<float> deGrDb { 0 };   // live de-esser gain reduction (read + reset by the editor)
+    TransStats trans;
+    std::atomic<float> tsDb { 0 };     // live transient-shaper move, dB, biggest |move| since the editor last read it (signed)
 
     void process (juce::AudioBuffer<float>& buf, const Params& p) noexcept
     {
@@ -605,6 +632,15 @@ public:
         const float grAtk = 1.0f - std::exp (-1.0f / (0.001f * (float) sr)), grRel = 1.0f - std::exp (-1.0f / (0.05f * (float) sr));
         const int deWin = std::max (1, (int) (0.01 * sr));
         if (sib.resetRequested.exchange (false)) { for (auto& h : sib.hist) h = 0; deWinMax = -100; deWinN = 0; deWinAct = false; }
+        if (trans.resetRequested.exchange (false)) { for (auto& h : trans.hist) h = 0; tsWinMax = 0; tsWinN = 0; tsWinAct = false; }
+        // transient shaper: ATTACK compares a fast envelope with a slow-attack one (the hit sticks out of the body),
+        // SUSTAIN compares a slow-release envelope with a fast-release one (the tail hangs on after the hit)
+        const float tAtk = p.transOn ? juce::jlimit (-1.0f, 1.0f, p.transAtk) * std::min (1.0f, p.amount) : 0.0f;
+        const float tSus = p.transOn ? juce::jlimit (-1.0f, 1.0f, p.transSus) * std::min (1.0f, p.amount) : 0.0f;
+        auto coef = [this] (float ms) { return 1.0f - std::exp (-1.0f / (0.001f * ms * (float) sr)); };
+        const float tFa = coef (0.2f), tSa = coef (15.0f), tR1 = coef (60.0f), tAa = coef (0.5f), tAr = coef (25.0f), tBr = coef (300.0f);
+        const float tsSm = coef (0.5f);
+        float tsPeak = 0;
         float ip = 0, op = 0;
 
         for (int s0 = 0; s0 < n; s0 += 16)
@@ -692,6 +728,24 @@ public:
                     ptr[s] = v;
                 }
                 if (compBuf[s - s0] < 0.999f) { L[s] *= compBuf[s - s0]; if (R != nullptr) R[s] *= compBuf[s - s0]; }
+                {   // transient shaper (its detector always runs: it also measures how hard the track's hits stick out)
+                    const float m = R != nullptr ? 0.5f * (std::abs (L[s]) + std::abs (R[s])) : std::abs (L[s]);
+                    tsF += (m > tsF ? tFa : tR1) * (m - tsF);
+                    tsS += (m > tsS ? tSa : tR1) * (m - tsS);
+                    tsA += (m > tsA ? tAa : tAr) * (m - tsA);
+                    tsB += (m > tsB ? tAa : tBr) * (m - tsB);
+                    const bool active = tsS > 3e-4f;   // ~ -70 dBFS
+                    const float atkDb = active ? juce::jlimit (0.0f, 30.0f, 20.0f * std::log10 ((tsF + 1e-9f) / (tsS + 1e-9f))) : 0.0f;
+                    const float susDb = active ? juce::jlimit (0.0f, 20.0f, 20.0f * std::log10 ((tsB + 1e-9f) / (tsA + 1e-9f))) : 0.0f;
+                    if (active) { tsWinMax = std::max (tsWinMax, atkDb); tsWinAct = true; }
+                    if (++tsWinN >= deWin) { if (tsWinAct) trans.add (tsWinMax); tsWinMax = 0; tsWinN = 0; tsWinAct = false; }
+                    const float want = juce::jlimit (-12.0f, 12.0f, tAtk * 0.8f * std::max (0.0f, atkDb - 2.0f))   // 2 dB dead zone: a held note's ripple isn't a hit
+                                      + juce::jlimit (-12.0f, 12.0f, tSus * 0.6f * susDb);
+                    const float g = juce::Decibels::decibelsToGain (want);
+                    tsGain += tsSm * (g - tsGain);
+                    if (std::abs (want) > std::abs (tsPeak)) tsPeak = want;
+                    if (std::abs (tsGain - 1.0f) > 1e-4f) { L[s] *= tsGain; if (R != nullptr) R[s] *= tsGain; }
+                }
                 const float l = L[s], r = R != nullptr ? R[s] : l;
                 outPow += matchA * (0.5f * (l * l + r * r) - outPow);
                 const float target = p.match && inPow > 1e-7f ? juce::jlimit (0.25f, 4.0f, std::sqrt (inPow / std::max (outPow, 1e-9f))) : 1.0f;
@@ -714,6 +768,7 @@ public:
         matchDb.store (20.0f * std::log10 (matchGain));
         compGrDb.store (std::max (compGrDb.load(), compGr));
         deGrDb.store (std::max (deGrDb.load(), deGr));
+        if (std::abs (tsPeak) > std::abs (tsDb.load())) tsDb.store (tsPeak);
     }
     std::atomic<float> compGrDb { 0 };   // live compressor gain reduction (read + reset by the editor)
 
@@ -777,6 +832,8 @@ private:
     Biquad hp1, hp2, lp, tone[kTone], narrow[kMaxRes], broad[kMaxRes], cut[kMaxRes], deHp, deLp, deLp2;
     float deEnvS = 1e-9f, deEnvF = 1e-9f, deGr = 0, deWinMax = -100, deHzCached = -1, deBuf[16] {};
     int deWinN = 0; bool deWinAct = false;
+    float tsF = 1e-9f, tsS = 1e-9f, tsA = 1e-9f, tsB = 1e-9f, tsGain = 1.0f, tsWinMax = 0;
+    int tsWinN = 0; bool tsWinAct = false;
     bool hpfOn = true, lpfOn = true, toneActive[kTone] {};
     float envN[kMaxRes] {}, envB[kMaxRes] {}, grSm[kMaxRes] {}, dRef[kMaxRes] {};
     float inPow = 1e-6f, outPow = 1e-6f, matchGain = 1.0f;

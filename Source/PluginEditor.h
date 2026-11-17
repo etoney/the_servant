@@ -102,7 +102,10 @@ private:
     ServantProcessor& proc;
     ServantLookAndFeel lnf;
     std::vector<std::unique_ptr<Knob>> knobs;
-    Knob *compKnob = nullptr, *trimKnob = nullptr, *deessKnob = nullptr, *deessHzKnob = nullptr;
+    Knob *compKnob = nullptr, *trimKnob = nullptr, *deessKnob = nullptr, *deessHzKnob = nullptr, *transAtkKnob = nullptr, *transSusKnob = nullptr;
+    juce::ToggleButton transOn { "ON" };
+    juce::Label transMove;
+    float transShown = 0.0f;
     juce::ToggleButton deessOn { "ON" };
     juce::Label deessGr;
     float deessGrShown = 0.0f;

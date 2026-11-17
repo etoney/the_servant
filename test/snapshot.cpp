@@ -440,6 +440,52 @@ int main (int argc, char** argv)
         check (p95 - p50 < 8.0f || p95 < -9.0f, "a distorted guitar doesn't read as sibilant");
     }
 
+    //==== TRANSIENTS: a drum hit every half second (a noisy crack over a ringing body) and a steady pad
+    {
+        auto drum = [] (int64_t n, int)
+        {
+            const double t = (double) n / 48000.0, th = std::fmod (t, 0.5);
+            uint32_t z = (uint32_t) n * 2654435761u; z ^= z >> 15; z *= 2246822519u; z ^= z >> 13;
+            const double nz = (double) (z & 0xffff) / 32768.0 - 1.0;
+            return (float) (0.5 * std::exp (-th * 60.0) * nz + 0.3 * std::exp (-th * 7.0) * std::sin (juce::MathConstants<double>::twoPi * 180.0 * th));
+        };
+        auto pad = [] (int64_t n, int) { return 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 220.0 * (double) n / 48000.0); };
+        ServantProcessor p;
+        for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (p, id, 0);
+        const int lat = 240;
+        // RMS (dB) over every hit in the window [a, b) seconds after each hit, from 2 s on
+        auto part = [&] (const Render& r, double a, double b)
+        {
+            double e = 0; int c = 0;
+            for (double h = 2.0; h < 7.5; h += 0.5)
+                for (int i = (int) ((h + a) * 48000.0); i < (int) ((h + b) * 48000.0); ++i) { const float y = r.l[(size_t) (i + lat)]; e += (double) y * y; ++c; }
+            return 10.0 * std::log10 (e / std::max (1, c) + 1e-20);
+        };
+        const auto dry = render (p, drum, 8.0, 0.0);
+        float tp95, tsec; p.getEngine().trans.read (tp95, tsec);
+        check (p.getLatencySamples() == lat, "latency as expected");
+        auto run = [&] (float atk, float sus) { setP (p, "transOn", 1); setP (p, "transAtk", atk); setP (p, "transSus", sus); auto r = render (p, drum, 8.0, 0.0); setP (p, "transOn", 0); return r; };
+        const auto aUp = run (100, 0), aDown = run (-100, 0), sDown = run (0, -100), sUp = run (0, 100);
+        const double atk0 = part (dry, 0.0, 0.008), tail0 = part (dry, 0.15, 0.35);
+        const double atkUp = part (aUp, 0, 0.008) - atk0, tailUpA = part (aUp, 0.15, 0.35) - tail0;
+        const double atkDown = part (aDown, 0, 0.008) - atk0;
+        const double tailDown = part (sDown, 0.15, 0.35) - tail0, atkSD = part (sDown, 0, 0.008) - atk0;
+        const double tailUp = part (sUp, 0.15, 0.35) - tail0;
+        check (atkUp > 3.0 && std::abs (tailUpA) < 1.0, juce::String::formatted ("ATTACK +100%%: the crack comes up %.1f dB, the tail stays (%.2f dB)", atkUp, tailUpA));
+        check (atkDown < -3.0, juce::String::formatted ("ATTACK -100%%: the crack goes down %.1f dB", atkDown));
+        check (tailDown < -3.0 && std::abs (atkSD) < 1.5, juce::String::formatted ("SUSTAIN -100%%: the tail goes down %.1f dB, the crack stays (%.2f dB)", tailDown, atkSD));
+        check (tailUp > 2.0, juce::String::formatted ("SUSTAIN +100%%: the tail comes up %.1f dB", tailUp));
+        const auto off = render (p, drum, 8.0, 0.0);
+        double mx = 0; for (size_t i = 0; i < off.l.size(); ++i) mx = std::max (mx, (double) std::abs (off.l[i] - dry.l[i]));
+        check (mx < 1e-6, "TRANSIENTS off: untouched");
+        ServantProcessor q;
+        for (auto* id : { "cleanOn", "resOn", "toneOn", "match" }) setP (q, id, 0);
+        render (q, pad, 6.0, 0.0);
+        float pp95, psec; q.getEngine().trans.read (pp95, psec);
+        std::cout << "       transients: drum p95 " << tp95 << " dB, pad p95 " << pp95 << " dB" << std::endl;
+        check (tp95 > 10.0f && pp95 < 3.0f && tsec > 5.0f, "it measures how hard a track's hits stick out (drum vs pad)");
+    }
+
     //==== 5) GUI
     {
         auto* ed = proc.createEditor();

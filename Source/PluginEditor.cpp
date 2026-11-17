@@ -249,7 +249,9 @@ void ServantLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
     juce::Path track; track.addCentredArc (c.x, c.y, ar, ar, 0, startAngle, endAngle, true);
     g.setColour (juce::Colour (0xff120e0c).withAlpha (alpha)); g.strokePath (track, juce::PathStrokeType (thick + 2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (juce::Colour (0xff3a2418).withAlpha (alpha)); g.strokePath (track, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    juce::Path val; val.addCentredArc (c.x, c.y, ar, ar, 0, startAngle, angle, true);
+    float from = startAngle;   // bipolar knobs (TRANSIENTS) sweep out from the middle
+    if (s.getProperties().contains ("bip")) from = startAngle + (float) s.valueToProportionOfLength (0.0) * (endAngle - startAngle);
+    juce::Path val; val.addCentredArc (c.x, c.y, ar, ar, 0, std::min (from, angle), std::max (from, angle), true);
     const bool isAmount = s.getName() == "amount";
     const bool gold = (bool) s.getProperties().getWithDefault ("gold", false);
     if (isAmount)
@@ -757,6 +759,18 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     deessGr.setJustificationType (juce::Justification::centred);
     deessGr.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (deessGr);
+    transAtkKnob = &makeKnob ("transAtk", "ATTACK", "Transient shaper: more (+) or less (-) of each hit's attack. + makes drums snap and picking cut through; - softens harsh or clicky attacks. The Master sets it by ROLE and how punchy the mix is.");
+    transSusKnob = &makeKnob ("transSus", "SUSTAIN", "Transient shaper: longer (+) or shorter (-) tails after each hit. - tightens a boomy kick or roomy drums; + brings out ring and body.");
+    transAtkKnob->slider.getProperties().set ("bip", true);
+    transSusKnob->slider.getProperties().set ("bip", true);
+    transOn.setTooltip ("Transient shaper on/off. The Master turns it on for tracks whose hits need more snap, or less.");
+    buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "transOn", transOn));
+    addAndMakeVisible (transOn);
+    transMove.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.0f, juce::Font::bold)));
+    transMove.setColour (juce::Label::textColourId, pal::paintDim);
+    transMove.setJustificationType (juce::Justification::centred);
+    transMove.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (transMove);
     compOn.setTooltip ("Compressor on/off.");
     buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
     addAndMakeVisible (compOn);
@@ -859,11 +873,16 @@ void ServantEditor::resized()
     deessGr.setBounds (288, 766, 70, 40);
     placeKnob (*deessKnob, { 362, 712, 84, 110 });
     placeKnob (*deessHzKnob, { 446, 712, 84, 110 });
-    plates.push_back ({ "COMPRESSOR", { 546, 698, 250, 130 } });
-    compOn.setBounds (558, 728, 90, 30);
-    placeKnob (*compKnob, { 668, 712, 116, 110 });
-    plates.push_back ({ "TRIM", { 806, 698, 238, 130 } });
-    placeKnob (*trimKnob, { 866, 712, 120, 110 });
+    plates.push_back ({ "COMPRESSOR", { 546, 698, 172, 130 } });
+    compOn.setBounds (556, 728, 70, 30);
+    placeKnob (*compKnob, { 630, 724, 84, 100 });
+    plates.push_back ({ "TRANSIENTS", { 728, 698, 214, 130 } });
+    transOn.setBounds (738, 728, 62, 30);
+    transMove.setBounds (738, 766, 62, 40);
+    placeKnob (*transAtkKnob, { 802, 724, 68, 100 });
+    placeKnob (*transSusKnob, { 870, 724, 68, 100 });
+    plates.push_back ({ "TRIM", { 952, 698, 92, 130 } });
+    placeKnob (*trimKnob, { 954, 724, 88, 100 });
 
     buildBackdrop();
 }
@@ -967,6 +986,14 @@ void ServantEditor::timerCallback()
         deessGr.setColour (juce::Label::textColourId, deessGrShown > 0.5f ? pal::signalHot : pal::paintDim);
         const bool gold = proc.isUserSet (ServantProcessor::kDeessHzFlag);
         if ((bool) deessHzKnob->slider.getProperties()["gold"] != gold) { deessHzKnob->slider.getProperties().set ("gold", gold); deessHzKnob->slider.repaint(); }
+    }
+    for (auto* k : { transAtkKnob, transSusKnob }) k->slider.setEnabled (params.transOn);
+    {
+        const float mv = proc.getEngine().tsDb.exchange (0.0f);
+        transShown = std::abs (mv) > std::abs (transShown) * 0.9f ? mv : transShown * 0.9f;
+        const auto t = ! params.transOn ? juce::String ("OFF") : (transShown >= 0 ? "+" : "") + juce::String (transShown, 1) + "\ndB";
+        if (transMove.getText() != t) transMove.setText (t, juce::dontSendNotification);
+        transMove.setColour (juce::Label::textColourId, std::abs (transShown) > 0.5f ? pal::signalHot : pal::paintDim);
     }
     for (auto* k : { depthKnob, sharpKnob, speedKnob }) k->slider.setEnabled (params.resOn);
     for (auto* k : toneKnobs) k->slider.setEnabled (params.toneOn);
@@ -1100,10 +1127,6 @@ void ServantEditor::buildBackdrop()
     for (auto rr : { curve.getBounds(), status.getBounds() })
     {
         g.setColour (juce::Colours::black.withAlpha (0.7f)); g.fillRoundedRectangle (rr.toFloat().expanded (4.0f), 6.0f);
-    }
-    {   // MIX LINK: ROLE label
-        auto tl = tex::distressedText ("AFTER MATCH", 80, 12, tex::plainBold (8.5f), pal::paintDim, juce::Justification::centredLeft, scale, 0.15f, 72, 0.12f);
-        g.drawImage (tl, juce::Rectangle<float> (818.0f, 724.0f, 80.0f, 12.0f));
     }
     {   // stamped hint under AMOUNT
         auto h1 = tex::distressedText ("100% = AS DECIDED.", 150, 14, tex::stencil (12.5f), pal::signalHot.withAlpha (0.9f), juce::Justification::centred, scale, 0.18f, 61, 0.14f);
