@@ -560,6 +560,93 @@ struct SibStats
     }
 };
 
+// NOISE: what this track does when nobody is playing it. Every second of the raw input (before The
+// Servant touches it) is checked: the quietest real (not digital-silence) seconds give the noise floor,
+// and a quiet second where 50 or 60 Hz and its harmonics stand out is hum. The Master reads this to put
+// BuzzKill on exactly the tracks that need it.
+class NoiseMeter
+{
+public:
+    void prepare (double rate) { sr = rate; len = std::max (1, (int) std::lround (sr)); buf.assign ((size_t) len, 0.0f); fill = 0; }
+    std::atomic<bool> resetRequested { false };
+
+    // message thread: judged against how loud the track got over the whole pass, so a count-in
+    // before anything was played still counts as quiet
+    struct Result { float floorDb = -120, loudDb = -120, humDb = 0; int humHz = 0, humSec = 0, quietSec = 0, seconds = 0; };
+    Result read() const
+    {
+        Result r;
+        const int n = std::min (count.load(), kMax);
+        r.seconds = n;
+        for (int i = 0; i < n; ++i) r.loudDb = std::max (r.loudDb, sec[(size_t) i].db);
+        for (int i = 0; i < n; ++i)
+        {
+            const auto& s = sec[(size_t) i];
+            r.floorDb = i == 0 ? s.db : std::min (r.floorDb, s.db);
+            if (s.db < -42.0f && s.db < r.loudDb - 20.0f)
+            {
+                ++r.quietSec;
+                if (s.humHz != 0) { ++r.humSec; if (s.humR > r.humDb) { r.humDb = s.humR; r.humHz = s.humHz; } }
+            }
+        }
+        return r;
+    }
+
+    void push (const float* l, const float* r, int n) noexcept
+    {
+        if (resetRequested.exchange (false)) { count = 0; fill = 0; }
+        if (buf.empty()) return;
+        for (int i = 0; i < n; ++i)
+        {
+            buf[(size_t) fill] = r != nullptr ? 0.5f * (l[i] + r[i]) : l[i];
+            if (++fill >= len) { second(); fill = 0; }
+        }
+    }
+
+private:
+    static double goertzel (const float* x, int n, double f, double rate)
+    {
+        const double c = 2.0 * std::cos (juce::MathConstants<double>::twoPi * f / rate);
+        double s1 = 0, s2 = 0;
+        for (int i = 0; i < n; ++i) { const double s0 = x[i] + c * s1 - s2; s2 = s1; s1 = s0; }
+        return std::max (1e-30, s1 * s1 + s2 * s2 - c * s1 * s2);
+    }
+    double ratio (double f) const
+    {
+        const float* x = buf.data();
+        const double p = goertzel (x, len, f, sr);
+        const double nb = 0.25 * (goertzel (x, len, f - 9.0, sr) + goertzel (x, len, f - 5.0, sr) + goertzel (x, len, f + 5.0, sr) + goertzel (x, len, f + 9.0, sr));
+        return 10.0 * std::log10 (p / nb);
+    }
+    void second() noexcept
+    {
+        double p = 0;
+        for (int i = 0; i < len; ++i) p += (double) buf[(size_t) i] * buf[(size_t) i];
+        const float db = (float) (10.0 * std::log10 (std::max (1e-20, p / len)));
+        if (db < -110.0f) return;                    // digital silence (a gate, an empty part): not noise
+        const int i = count.load();
+        if (i >= kMax) return;
+        Sec s; s.db = db;
+        if (db < -42.0f)                             // could be a quiet second: is there hum in it?
+        {
+            const double r50 = ratio (50.0), r60 = ratio (60.0);
+            const bool is60 = r60 >= r50;
+            const double f0 = is60 ? 60.0 : 50.0, rr = is60 ? r60 : r50;
+            const double h = std::max (ratio (2.0 * f0), ratio (3.0 * f0));
+            if (rr > 12.0 && h > 6.0) { s.humR = (float) rr; s.humHz = is60 ? 60 : 50; }
+        }
+        sec[(size_t) i] = s;
+        count = i + 1;
+    }
+    struct Sec { float db = -120, humR = 0; int humHz = 0; };
+    static constexpr int kMax = 1800;                // 30 minutes
+    std::array<Sec, kMax> sec {};
+    std::atomic<int> count { 0 };
+    double sr = 48000.0;
+    std::vector<float> buf;
+    int len = 48000, fill = 0;
+};
+
 // The compressor's character. Same AMOUNT knob; the style decides how it reacts.
 struct CompStyle { float atkMs, relMs, ratioBase, ratioAmt, kneeDb, rmsMs; bool lookahead; float thrOff; const char* name; };
 inline const CompStyle& compStyle (int i)
@@ -587,6 +674,7 @@ public:
     {
         sr = sampleRate;
         analyzer.prepare (sr);
+        noise.prepare (sr);
         look = juce::roundToInt (0.005 * sr);
         dl.assign ((size_t) (look + 1) * 2, 0.0f);
         dd.assign ((size_t) (look + 1) * 2, 0.0f);
@@ -618,6 +706,7 @@ public:
     SibStats sib;
     std::atomic<float> deGrDb { 0 };   // live de-esser gain reduction (read + reset by the editor)
     TransStats trans;
+    NoiseMeter noise;
     std::atomic<float> tsDb { 0 };     // live transient-shaper move, dB, biggest |move| since the editor last read it (signed)
 
     void process (juce::AudioBuffer<float>& buf, const Params& p) noexcept
@@ -627,6 +716,7 @@ public:
         float* L = buf.getWritePointer (0);
         float* R = nch > 1 ? buf.getWritePointer (1) : nullptr;
         analyzer.push (L, R, n);
+        noise.push (L, R, n);
         pickUpResonances();
         updateStatic (p);
 

@@ -134,6 +134,36 @@ int main (int argc, char** argv)
     outDir.createDirectory();
     const double sr = 48000.0;
 
+    //==== 0) NOISE: hum in the quiet parts of a track, and a clean one
+    {
+        auto run = [&] (float noiseDb, bool hum)
+        {
+            auto mp = std::make_unique<svt::NoiseMeter>(); auto& m = *mp; m.prepare (sr);
+            juce::Random rnd (3);
+            std::vector<float> x (480);
+            const float na = std::pow (10.0f, noiseDb / 20.0f);
+            double t = 0;
+            for (int blk = 0; blk < (int) (sr * 12 / 480); ++blk)
+            {
+                for (size_t i = 0; i < x.size(); ++i, t += 1.0 / sr)
+                {
+                    float v = na * (rnd.nextFloat() * 2.0f - 1.0f);
+                    if (hum) v += na * 3.0f * (float) (std::sin (2 * juce::MathConstants<double>::pi * 50 * t) + 0.5 * std::sin (2 * juce::MathConstants<double>::pi * 100 * t)
+                                                       + 0.4 * std::sin (2 * juce::MathConstants<double>::pi * 150 * t));
+                    if (t > 4.0 && t < 9.0) v += 0.3f * (float) std::sin (2 * juce::MathConstants<double>::pi * 196 * t);   // playing
+                    x[i] = v;
+                }
+                m.push (x.data(), nullptr, (int) x.size());
+            }
+            const auto r = m.read();
+            return std::make_tuple (r.humSec, r.humHz, r.floorDb, r.quietSec);
+        };
+        auto [hs, hz, fl, qs] = run (-70.0f, true);
+        check (hs >= 4 && hz == 50 && qs >= 4, "NOISE: 50 Hz hum found in the track's quiet parts (" + juce::String (hs) + " s of " + juce::String (qs) + ", floor " + juce::String (fl, 0) + " dB)");
+        auto [hs2, hz2, fl2, qs2] = run (-92.0f, false);
+        check (hs2 == 0 && fl2 < -80.0f, "NOISE: a clean track has no hum and a floor under -80 dB (" + juce::String (fl2, 0) + " dB)");
+    }
+
     //==== 1) role rules
     {
         float flat[svt::kBands];

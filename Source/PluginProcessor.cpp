@@ -36,7 +36,7 @@ ServantProcessor::ServantProcessor()
     link->onOtherMessage = [this] (const juce::var& m)
     {
         const auto type = m.getProperty ("type", "").toString();
-        if (type == "measure-reset") { bandMeter.requestReset(); engine.sib.resetRequested = true; engine.trans.resetRequested = true; startAnalysis(); }      // The Master's RESET: listen again
+        if (type == "measure-reset") { bandMeter.requestReset(); engine.sib.resetRequested = true; engine.trans.resetRequested = true; engine.noise.resetRequested = true; startAnalysis(); }      // The Master's RESET: listen again
         else if (type == "analyze-finish")                                                // its PRESCRIBE: decide now
         {
             finishAnalysis();
@@ -67,6 +67,14 @@ ServantProcessor::ServantProcessor()
         o->setProperty ("listening", getStage() == Stage::listening);
         o->setProperty ("finished", finishedSeq);
         int nRes = 0; getAppliedRes (nRes);
+        {
+            auto* nz = new juce::DynamicObject();
+            const auto nm = engine.noise.read();
+            nz->setProperty ("floorDb", (double) nm.floorDb); nz->setProperty ("loudDb", (double) nm.loudDb);
+            nz->setProperty ("humHz", nm.humHz); nz->setProperty ("humDb", (double) nm.humDb);
+            nz->setProperty ("humSeconds", nm.humSec); nz->setProperty ("quietSeconds", nm.quietSec); nz->setProperty ("seconds", nm.seconds);
+            o->setProperty ("noise", juce::var (nz));
+        }
         o->setProperty ("cleanup", analysis.valid ? cleanup.why + "; " + juce::String (nRes) + (nRes == 1 ? " resonance" : " resonances") : juce::String());
         return juce::var (o);
     };
