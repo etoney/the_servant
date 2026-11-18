@@ -101,7 +101,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayo
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "amount", 1 }, "Amount", NormalisableRange<float> (0.0f, 150.0f, 0.1f), 100.0f, pctAttr));
 
     p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "cleanOn", 1 }, "Clean-up On", true));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "hpf", 1 }, "High-Pass", skewed (20.0f, 400.0f, 90.0f), 80.0f, hzAttr));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "hpf", 1 }, "High-Pass", skewed (20.0f, 400.0f, 90.0f), 20.0f, hzAttr));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "lpf", 1 }, "Low-Pass", skewed (2000.0f, 20000.0f, 9000.0f), 20000.0f, lpfAttr));
 
     p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "resOn", 1 }, "Resonance On", true));
@@ -312,6 +312,9 @@ void ServantProcessor::parameterChanged (const juce::String& id, float)
 void ServantProcessor::timerCallback()
 {
     if (roleChanged.exchange (false) && ltasFrames > 0 && getStage() != Stage::listening) { decideAndApply (true); ++analysisVersion; }
+    // a new Servant starts listening by itself once it hears its track, so The Master's GO TO FIX can
+    // decide its clean-up even if it was added after RESET (it used to sit on its default high-pass)
+    if (ltasFrames <= 0 && ! engine.analyzer.learning.load() && bandMeter.outSeconds.load() > 0.5) startAnalysis();
 }
 
 //==============================================================================
