@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must come BEFORE project(), or CMake ignores them: universal (Apple Silicon + Intel), macOS 11+
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
-project(SERVANT VERSION 0.7.0)
+project(SERVANT VERSION 0.7.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,7 +30,7 @@ juce_add_plugin(Servant
     BUNDLE_ID com.castledanger.servant
     PLUGIN_MANUFACTURER_CODE Cdgr
     PLUGIN_CODE Svt1
-    FORMATS VST3 AU Standalone
+    FORMATS VST3 AU
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE

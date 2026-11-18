@@ -48,7 +48,7 @@ jobs:
             cmake -B build -DCMAKE_BUILD_TYPE=Release
           fi
       - name: Build
-        run: cmake --build build --config Release --target Servant_VST3 Servant_Standalone
+        run: cmake --build build --config Release --target Servant_VST3
       - name: Build AU (macOS)
         if: runner.os == 'macOS'
         run: cmake --build build --config Release --target Servant_AU
@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for b in build/*_artefacts/Release/VST3/*.vst3 build/*_artefacts/Release/AU/*.component build/*_artefacts/Release/Standalone/*.app; do
+          for b in build/*_artefacts/Release/VST3/*.vst3 build/*_artefacts/Release/AU/*.component; do
             [ -e "$b" ] || continue
             n=$(basename "$b"); n="${n%.*}"
             bin="$b/Contents/MacOS/$n"
@@ -73,15 +73,13 @@ jobs:
           OS=$([ "$RUNNER_OS" = "macOS" ] && echo macOS || echo Windows)
           ZIP="TheServant-v${VER}-${OS}.zip"
           R=build/Servant_artefacts/Release
-          mkdir -p pkg/TheServant/VST3 pkg/TheServant/Standalone
+          mkdir -p pkg/TheServant/VST3
           cp readme.txt controls.txt LICENSE.txt THIRD-PARTY-NOTICES.txt pkg/TheServant/
           cp -R "$R/VST3/TheServant.vst3" pkg/TheServant/VST3/
           if [ "$OS" = "macOS" ]; then
             mkdir -p pkg/TheServant/AU && cp -R "$R/AU/TheServant.component" pkg/TheServant/AU/
-            cp -R "$R/Standalone/TheServant.app" pkg/TheServant/Standalone/
             (cd pkg && ditto -c -k --sequesterRsrc --keepParent TheServant "../$ZIP")
           else
-            cp "$R/Standalone/TheServant.exe" pkg/TheServant/Standalone/
             (cd pkg && 7z a -tzip -mx=9 "../$ZIP" TheServant > /dev/null)   # 7z writes forward-slash paths
           fi
           ls -la "$ZIP"
@@ -99,4 +97,3 @@ jobs:
             THIRD-PARTY-NOTICES.txt
             build/Servant_artefacts/Release/VST3
             build/Servant_artefacts/Release/AU
-            build/Servant_artefacts/Release/Standalone

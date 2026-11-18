@@ -1,6 +1,6 @@
 # The Servant
 
-A free track assistant (VST3 / AU / Standalone) by **Castle Danger Music Company**, run by **The Master** on the master bus.
+A free track assistant (VST3 / AU) by **Castle Danger Music Company**, run by **The Master** on the master bus.
 
 Put it on your tracks and set each one's **ROLE**. The Master's **RESET** starts every Servant listening; its **PRESCRIBE** makes each one decide, from its own track and role:
 
@@ -17,7 +17,7 @@ See `controls.txt` for every control and `readme.txt` for installing.
 
 ## Building
 
-Pushing to `main` runs GitHub Actions, which builds macOS (VST3 + AU + Standalone, universal) and Windows (VST3 + Standalone), then:
+Pushing to `main` runs GitHub Actions, which builds macOS (VST3 + AU, universal) and Windows (VST3), then:
 
 - uploads the builds as workflow artifacts, and
 - pushes the release zips to the `downloads-macos` / `downloads-windows` branches.
