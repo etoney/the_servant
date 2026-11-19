@@ -309,7 +309,12 @@ void ServantProcessor::decideAndApply (bool applyToKnobs)
 
 void ServantProcessor::parameterChanged (const juce::String& id, float)
 {
-    if (id == "role") { roleChanged = true; return; }   // re-decide the clean-up for the new role (timer)
+    if (id == "role")
+    {
+        roleChanged = true;                                         // re-decide the clean-up for the new role (timer)
+        if (! settingRole.load() && ! applying.load()) roleAuto = false;   // you picked it: the track name no longer decides
+        return;
+    }
     if (applying.load()) return;
     if (id == "hpf") userSet[kHpfFlag] = true;
     else if (id == "deessHz") userSet[kDeessHzFlag] = true;
@@ -319,6 +324,11 @@ void ServantProcessor::parameterChanged (const juce::String& id, float)
 
 void ServantProcessor::timerCallback()
 {
+    if (roleAuto.load() && nameChanged.exchange (false))
+    {
+        const int g = guessedRole();
+        if (g >= 0 && g != (int) apvts.getRawParameterValue ("role")->load()) { settingRole = true; setParam ("role", (float) g); settingRole = false; }
+    }
     if (roleChanged.exchange (false) && ltasFrames > 0 && getStage() != Stage::listening) { decideAndApply (true); ++analysisVersion; }
     // a new Servant starts listening by itself once it hears its track, so The Master's GO TO FIX can
     // decide its clean-up even if it was added after RESET (it used to sit on its default high-pass)
@@ -340,6 +350,7 @@ void ServantProcessor::getStateInformation (juce::MemoryBlock& destData)
     }
     for (int i = 0; i < svt::kMaxRes; ++i) mutes << (engine.muted[(size_t) i].load() ? "1" : "0");
     s.setProperty ("userSet", flags, nullptr);
+    s.setProperty ("roleAuto", roleAuto.load(), nullptr);
     s.setProperty ("res", res, nullptr);
     s.setProperty ("muted", mutes, nullptr);
     if (ltasFrames > 0)
@@ -369,6 +380,8 @@ void ServantProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (! s.isValid()) return;
 
     const juce::String flags = s.getProperty ("userSet", "");
+    roleAuto = (bool) s.getProperty ("roleAuto", false);   // projects from before 0.8 keep the role you set
+    nameChanged = true;
     for (int i = 0; i < kNumFlags; ++i) userSet[(size_t) i] = flags.substring (i, i + 1) == "1";
 
     nApplied = 0;

@@ -506,7 +506,7 @@ void CurveDisplay::paint (juce::Graphics& g)
     {
         const auto track = proc.getTrackName();
         g.setColour (pal::hazard.withAlpha (0.8f)); g.setFont (ledFont (10.5f));
-        g.drawText ("ROLE: " + proc.getRoleName().toUpperCase() + (track.isNotEmpty() ? "  //  " + track.toUpperCase() : juce::String()),
+        g.drawText ("ROLE: " + proc.getRoleName().toUpperCase() + (proc.isRoleAuto() ? " (AUTO)" : "") + (track.isNotEmpty() ? "  //  " + track.toUpperCase() : juce::String()),
                     juce::Rectangle<float> (p.getX() + 2.0f, p.getY() - 12.0f, p.getWidth() * 0.5f, 11.0f), juce::Justification::centredLeft);
     }
     const auto& a = proc.getAnalysis();
@@ -784,12 +784,27 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     addAndMakeVisible (compRead);
     buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
     addAndMakeVisible (compOn);
+    roleBox.addItem ("AUTO: from the track name", kRoleAutoId);
+    roleBox.addSeparator();
     for (int idx : svt::roleMenuOrder()) roleBox.addItem (ServantProcessor::roleNames()[idx], idx + 1);   // item id = parameter index + 1
     roleBox.setTooltip ("What this track is in the song. The Master balances the mix by it (the lead vocal and lead guitar stay on top, "
-                        "backing vocals sit under the lead, kick and bass own the low end), and The Servant picks its clean-up by it.");
+                        "backing vocals sit under the lead, kick and bass own the low end), and The Servant picks its clean-up by it. "
+                        "It's set from the track's name (\"Lead Vox\", \"BGV\", \"Kick\", \"Rhythm Gtr\"...) until you pick one yourself; "
+                        "AUTO goes back to the name.");
     roleAtt = std::make_unique<juce::ParameterAttachment> (*p.apvts.getParameter ("role"),
                                                            [this] (float v) { roleBox.setSelectedId (juce::roundToInt (v) + 1, juce::dontSendNotification); });
-    roleBox.onChange = [this] { if (roleBox.getSelectedId() > 0) roleAtt->setValueAsCompleteGesture ((float) (roleBox.getSelectedId() - 1)); };
+    roleBox.onChange = [this]
+    {
+        const int id = roleBox.getSelectedId();
+        if (id == kRoleAutoId)
+        {
+            proc.setRoleAuto (true);
+            roleBox.setSelectedId (juce::roundToInt (proc.apvts.getRawParameterValue ("role")->load()) + 1, juce::dontSendNotification);
+            repaint();
+            return;
+        }
+        if (id > 0) roleAtt->setValueAsCompleteGesture ((float) (id - 1));
+    };
     roleAtt->sendInitialUpdate();
     addAndMakeVisible (roleBox);
     linkLabel.setFont (juce::Font (juce::FontOptions (12.5f)));

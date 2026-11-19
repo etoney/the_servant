@@ -78,6 +78,7 @@ private:
 
 class ServantEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
+    static constexpr int kRoleAutoId = 1000;
 public:
     explicit ServantEditor (ServantProcessor&);
     ~ServantEditor() override;

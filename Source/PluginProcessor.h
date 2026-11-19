@@ -62,7 +62,11 @@ public:
     static const juce::StringArray& roleNames();
     juce::String getRoleName() const;
     juce::String getTrackName() const { const juce::ScopedLock sl (nameLock); return trackName; }
-    void updateTrackProperties (const TrackProperties& props) override { const juce::ScopedLock sl (nameLock); trackName = props.name.value_or (juce::String()); }
+    void updateTrackProperties (const TrackProperties& props) override { { const juce::ScopedLock sl (nameLock); trackName = props.name.value_or (juce::String()); } nameChanged = true; }
+    // ROLE AUTO: until you pick a role yourself, The Servant sets it from the track's name
+    bool isRoleAuto() const { return roleAuto.load(); }
+    void setRoleAuto (bool on) { roleAuto = on; if (on) nameChanged = true; }
+    int guessedRole() const { return svt::roleFromName (getTrackName()); }
     using Link = cdlink::PluginLink<juce::AudioProcessorValueTreeState>;
     Link& getLink() { return *link; }
     svt::BandMeter& getBandMeter() { return bandMeter; }
@@ -78,6 +82,7 @@ private:
     float deessHzDecided = 6500.0f;
     int finishedSeq = 0;
     std::atomic<bool> roleChanged { false };
+    std::atomic<bool> roleAuto { true }, nameChanged { true }, settingRole { false };
     void timerCallback() override;
     void decideAndApply (bool applyToKnobs);
     void setParam (const juce::String& id, float value);

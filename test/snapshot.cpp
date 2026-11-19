@@ -134,6 +134,26 @@ int main (int argc, char** argv)
     outDir.createDirectory();
     const double sr = 48000.0;
 
+    //==== ROLE from the track name
+    {
+        const std::vector<std::pair<const char*, int>> cases {
+            { "Lead Vox", 0 }, { "Vocals", 0 }, { "LV", 0 }, { "Vox 1", 0 }, { "Scream", 0 },
+            { "BGV 2", 9 }, { "Backing Vocals", 9 }, { "Harmony", 9 }, { "Vox Dbl", 9 }, { "BV L", 9 },
+            { "Rythm GTR1 R", 1 }, { "Rhythm Gtr L", 1 }, { "Guitar", 1 }, { "GTR DI", 1 }, { "Riff", 1 },
+            { "Lead Gtr", 8 }, { "Solo", 8 }, { "Guitar Solo", 8 },
+            { "Bass", 2 }, { "Bass DI", 2 }, { "Sub 808", 2 },
+            { "Kick", 3 }, { "Kick In", 3 }, { "BD", 3 }, { "Bass Drum", 3 },
+            { "Snare Top", 4 }, { "SN", 4 },
+            { "Drums", 5 }, { "OH L", 5 }, { "Toms", 5 }, { "Room", 5 }, { "Hi Hat", 5 },
+            { "Keys", 6 }, { "Piano", 6 }, { "Synth Pad", 6 }, { "Lead Synth", 6 },
+            { "Audio 7", -1 }, { "Track 3", -1 }, { "", -1 }, { "Lead", -1 } };
+        juce::StringArray bad;
+        for (auto& [n, want] : cases) if (svt::roleFromName (n) != want) bad.add (juce::String (n) + " -> " + juce::String (svt::roleFromName (n)));
+        check (bad.isEmpty(), "ROLE from the track name (" + juce::String ((int) cases.size()) + " names)" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));
+        ServantProcessor sp;
+        check (sp.isRoleAuto(), "a new Servant sets its ROLE from the track name until you pick one");
+    }
+
     //==== 0) NOISE: hum in the quiet parts of a track, and a clean one
     {
         auto run = [&] (float noiseDb, bool hum)

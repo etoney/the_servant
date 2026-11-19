@@ -13,9 +13,13 @@ It needs The Master. Without it, it waits (and passes your track through).
 -------------------------------------------------------------------------------
 THE WORKFLOW (all from The Master)
 -------------------------------------------------------------------------------
-  1. Put The Servant on every track you want balanced, and set each one's
+  1. Put The Servant on every track you want balanced and check each one's
      ROLE (top right): Lead Vocal, Backing Vocals, Lead Guitar, Rhythm
      Guitar, Bass, Kick, Snare, Drums, Keys / Pads, Other.
+     ROLE sets itself from the track's name ("Lead Vox", "BGV", "Kick",
+     "Rhythm Gtr L", "Bass DI", "OH"...) while it's on AUTO. Pick a role
+     yourself to override it; "AUTO: from the track name" at the top of the
+     menu goes back to the name.
   2. Put The Master last on the master bus. Each Servant links by itself.
   3. On The Master press RESET and play the whole song. Every Servant listens
      to its own track at the same time (it also starts listening by itself

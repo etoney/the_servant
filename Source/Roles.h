@@ -52,6 +52,43 @@ inline const std::array<int, kNumRoles>& roleMenuOrder()
     return o;
 }
 
+// ROLE from the DAW's track name ("Lead Vox", "BGV 2", "Kick In", "Rythm GTR1 L", "Bass DI", "OH L"...).
+// -1 when the name says nothing about the part. Checked in this order: backing vocals before vocals,
+// kick before bass ("bass drum"), lead guitar before rhythm guitar.
+inline int roleFromName (const juce::String& raw)
+{
+    // lower case, letters and digits split apart ("gtr1" -> "gtr 1"), everything else a space
+    juce::String n;
+    juce::juce_wchar prev = 0;
+    for (auto c : raw.toLowerCase())
+    {
+        const bool alpha = juce::CharacterFunctions::isLetter (c), digit = juce::CharacterFunctions::isDigit (c);
+        if (! alpha && ! digit) c = ' ';
+        else if (prev != 0 && (juce::CharacterFunctions::isLetter (prev) != alpha)) n << ' ';
+        n << c; prev = (alpha || digit) ? c : 0;
+    }
+    juce::StringArray w; w.addTokens (n, " ", ""); w.removeEmptyStrings();
+    if (w.isEmpty()) return -1;
+    auto has = [&] (std::initializer_list<const char*> words) { for (auto* x : words) if (w.contains (x)) return true; return false; };
+    auto starts = [&] (std::initializer_list<const char*> pre) { for (auto& t : w) for (auto* x : pre) if (t.startsWith (x)) return true; return false; };
+    const bool voice = has ({ "vox", "vocal", "vocals", "voc", "vo", "vx", "voice", "singer", "sing", "lv", "leadvox", "rap", "scream", "screams", "harmony", "harmonies", "harm", "choir", "adlib", "adlibs" }) || starts ({ "vocal", "vox" });
+    if (has ({ "bv", "bvs", "bgv", "bgvs", "bkg", "bvox", "choir", "harmony", "harmonies", "harm", "adlib", "adlibs", "gang" })
+        || (voice && has ({ "backing", "back", "bk", "bg", "dbl", "double", "doubles", "oohs", "aahs" }))) return 9;
+    if (voice) return 0;
+    if (has ({ "kick", "kik", "kck", "bd", "kd" }) || (has ({ "bass" }) && has ({ "drum" }))) return 3;
+    if (has ({ "snare", "snr", "sn", "sd" })) return 4;
+    if (has ({ "drum", "drums", "kit", "oh", "ohs", "overhead", "overheads", "room", "rooms", "tom", "toms", "hat", "hats", "hh", "hihat",
+              "cymbal", "cymbals", "ride", "crash", "perc", "percussion", "shaker", "tamb", "loop", "beat", "beats" })) return 5;
+    if (has ({ "bass", "bs", "bas", "sub", "808" })) return 2;
+    const bool guitar = has ({ "gtr", "gtrs", "guitar", "guitars", "gt", "git", "gtar", "elec", "acoustic", "ac", "dist" }) || starts ({ "guitar" });
+    const bool lead = has ({ "lead", "ld", "solo", "melody", "mel" });
+    if (guitar) return lead ? 8 : 1;
+    if (has ({ "keys", "key", "kb", "piano", "pno", "synth", "synths", "syn", "pad", "pads", "organ", "rhodes", "wurli", "strings", "str", "string", "mellotron" })) return 6;
+    if (has ({ "solo" })) return 8;                                                // "Solo": a guitar solo (a bare "Lead" could be a voice: left alone)
+    if (has ({ "rhythm", "rythm", "rhy", "rhyth", "riff", "chug", "chugs" })) return 1;
+    return -1;
+}
+
 struct Cleanup { float hpf = 80.0f, lpf = 20000.0f, resTol = 3.0f; juce::String why; };
 
 // measured: the track's shape (dB per 1/6-octave band; only the shape matters)
