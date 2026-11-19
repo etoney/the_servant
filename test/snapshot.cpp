@@ -146,6 +146,8 @@ int main (int argc, char** argv)
             { "Snare Top", 6 }, { "SN", 6 },
             { "Drums", 7 }, { "OH L", 7 }, { "Toms", 7 }, { "Room", 7 }, { "Hi Hat", 7 },
             { "Keys", 8 }, { "Piano", 8 }, { "Synth Pad", 8 }, { "Lead Synth", 8 },
+            { "LVox02", 0 }, { "BVox07", 1 }, { "30_Vox05", 0 }, { "14_ElecGtr04DI", 3 }, { "02_SnareUp", 6 }, { "04_HiHat", 7 }, { "09_DrumsRoom", 7 },
+            { "07_ChinaCymbal", 7 }, { "08_Overheads", 7 }, { "01_Kick", 5 }, { "10_Bass", 4 }, { "25_Piano", 8 }, { "23_Synth3", 8 }, { "drumsroom", 7 },
             { "Audio 7", -1 }, { "Track 3", -1 }, { "", -1 }, { "Lead", -1 } };
         juce::StringArray bad;
         for (auto& [n, want] : cases) if (svt::roleFromName (n) != want) bad.add (juce::String (n) + " -> " + juce::String (svt::roleFromName (n)));

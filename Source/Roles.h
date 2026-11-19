@@ -5,6 +5,7 @@
 //     whole mix against the genre (the MIX profile).
 //   - CLEAN-UP and RESONANCES are decided here, from what this track actually plays plus its ROLE:
 //     where its useful range starts and ends, and what rings out of it.
+#include <cstring>
 #include "ServantDsp.h"
 
 namespace svt
@@ -46,23 +47,45 @@ inline const RoleRules& roleRules (int role)
 // ROLE from the DAW's track name ("Lead Vox", "BGV 2", "Kick In", "Rythm GTR1 L", "Bass DI", "OH L"...).
 // -1 when the name says nothing about the part. Checked in this order: backing vocals before vocals,
 // kick before bass ("bass drum"), lead guitar before rhythm guitar.
+inline int roleFromNameWords (const juce::StringArray& w);
+
 inline int roleFromName (const juce::String& raw)
 {
-    // lower case, letters and digits split apart ("gtr1" -> "gtr 1"), everything else a space
+    // words: camelCase, letters/digits and punctuation split apart ("14_ElecGtr04DI" -> "elec gtr 04 di")
     juce::String n;
     juce::juce_wchar prev = 0;
-    for (auto c : raw.toLowerCase())
+    for (auto c : raw)
     {
         const bool alpha = juce::CharacterFunctions::isLetter (c), digit = juce::CharacterFunctions::isDigit (c);
-        if (! alpha && ! digit) c = ' ';
-        else if (prev != 0 && (juce::CharacterFunctions::isLetter (prev) != alpha)) n << ' ';
-        n << c; prev = (alpha || digit) ? c : 0;
+        if (! alpha && ! digit) { n << ' '; prev = 0; continue; }
+        if (prev != 0 && (juce::CharacterFunctions::isLetter (prev) != alpha
+                          || (juce::CharacterFunctions::isLowerCase (prev) && juce::CharacterFunctions::isUpperCase (c)))) n << ' ';
+        n << juce::CharacterFunctions::toLowerCase (c); prev = c;
     }
     juce::StringArray w; w.addTokens (n, " ", ""); w.removeEmptyStrings();
     if (w.isEmpty()) return -1;
+    const int r = roleFromNameWords (w);
+    if (r >= 0) return r;
+    // run-together words ("drumsroom", "lvox", "bassgtr"): split out the part names and try again
+    static const char* stems[] = { "overhead", "backing", "cymbal", "guitar", "vocal", "snare", "drum", "kick", "bass", "synth", "piano",
+                                   "keys", "room", "vox", "gtr", "tom", "hat", "pad" };
+    juce::StringArray x;
+    for (auto t : w)
+    {
+        for (auto* st : stems)
+            if (t.length() > (int) std::strlen (st) && t.contains (st)) { t = t.replace (st, juce::String (" ") + st + " "); break; }
+        x.addTokens (t, " ", "");
+    }
+    x.removeEmptyStrings();
+    if (x.size() > w.size()) { if (x.contains ("l") && x.contains ("vox")) x.add ("lv"); if (x.contains ("b") && x.contains ("vox")) x.add ("bv"); return roleFromNameWords (x); }
+    return -1;
+}
+
+inline int roleFromNameWords (const juce::StringArray& w)
+{
     auto has = [&] (std::initializer_list<const char*> words) { for (auto* x : words) if (w.contains (x)) return true; return false; };
     auto starts = [&] (std::initializer_list<const char*> pre) { for (auto& t : w) for (auto* x : pre) if (t.startsWith (x)) return true; return false; };
-    const bool voice = has ({ "vox", "vocal", "vocals", "voc", "vo", "vx", "voice", "singer", "sing", "lv", "leadvox", "rap", "scream", "screams", "harmony", "harmonies", "harm", "choir", "adlib", "adlibs" }) || starts ({ "vocal", "vox" });
+    const bool voice = has ({ "vox", "vocal", "vocals", "voc", "vo", "vx", "voice", "singer", "sing", "lv", "lvox", "ldvox", "leadvox", "rap", "scream", "screams", "harmony", "harmonies", "harm", "choir", "adlib", "adlibs" }) || starts ({ "vocal", "vox" });
     if (has ({ "bv", "bvs", "bgv", "bgvs", "bkg", "bvox", "choir", "harmony", "harmonies", "harm", "adlib", "adlibs", "gang" })
         || (voice && has ({ "backing", "back", "bk", "bg", "dbl", "double", "doubles", "oohs", "aahs" }))) return 1;
     if (voice) return 0;
