@@ -437,6 +437,24 @@ int main (int argc, char** argv)
         check (std::abs (q.apvts.getRawParameterValue ("t1g")->load() + 2.5f) < 0.02f && std::abs (q.apvts.getRawParameterValue ("trim")->load() - 2.0f) < 0.02f,
                "LOCK keeps the tone EQ; The Master still sets the level");
         setP (q, "toneLock", 0.0f);
+
+        // REBEL: The Master's settings don't land; it still hears what the track reports
+        setP (q, "rebel", 1.0f);
+        lastApplied = juce::var();
+        auto set3 = cdlink::Endpoint::makeMessage ("set");
+        auto* prm3 = new juce::DynamicObject();
+        prm3->setProperty ("t1g", 5.0); prm3->setProperty ("trim", -4.0); prm3->setProperty ("compOn", 0.0);
+        set3->setProperty ("params", juce::var (prm3));
+        master.send (set3, q.getLink().getId());
+        for (int i = 0; i < 40 && ! lastApplied.isObject(); ++i) pump (50);
+        lastStatus = juce::var();
+        for (int i = 0; i < 30 && ! lastStatus.isObject(); ++i) pump (50);
+        check (lastApplied.isObject() && (bool) lastApplied.getProperty ("rebel", false)
+               && std::abs (q.apvts.getRawParameterValue ("t1g")->load() + 2.5f) < 0.02f && std::abs (q.apvts.getRawParameterValue ("trim")->load() - 2.0f) < 0.02f
+               && q.apvts.getRawParameterValue ("compOn")->load() > 0.5f
+               && (double) lastStatus.getProperty ("params", {}).getProperty ("rebel", 0.0) > 0.5,
+               "REBEL: nothing The Master sends changes the track, and The Master sees the switch");
+        setP (q, "rebel", 0.0f);
     }
 
     //==== DE-ESSER: a "voice" (vowels + an "s" burst every second) and a distorted guitar

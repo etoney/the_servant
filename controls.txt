@@ -132,3 +132,8 @@ NOTES
     Master balances them. Once you're happy you can print tracks to save CPU.
   - Profile folders from older versions are no longer used; you can delete
     ~/Library/Application Support/Castle Danger/Profiles/Parts.
+
+REBEL  (next to the link lamp)
+  On: The Master keeps its hands off this plugin. Nothing it sends changes a setting here; it still
+  hears what the plugin does and plans the rest of the mix around it. Saved with the project; presets
+  never change it. Turn it off to let The Master run the plugin again.
