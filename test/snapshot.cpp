@@ -138,14 +138,14 @@ int main (int argc, char** argv)
     {
         const std::vector<std::pair<const char*, int>> cases {
             { "Lead Vox", 0 }, { "Vocals", 0 }, { "LV", 0 }, { "Vox 1", 0 }, { "Scream", 0 },
-            { "BGV 2", 9 }, { "Backing Vocals", 9 }, { "Harmony", 9 }, { "Vox Dbl", 9 }, { "BV L", 9 },
-            { "Rythm GTR1 R", 1 }, { "Rhythm Gtr L", 1 }, { "Guitar", 1 }, { "GTR DI", 1 }, { "Riff", 1 },
-            { "Lead Gtr", 8 }, { "Solo", 8 }, { "Guitar Solo", 8 },
-            { "Bass", 2 }, { "Bass DI", 2 }, { "Sub 808", 2 },
-            { "Kick", 3 }, { "Kick In", 3 }, { "BD", 3 }, { "Bass Drum", 3 },
-            { "Snare Top", 4 }, { "SN", 4 },
-            { "Drums", 5 }, { "OH L", 5 }, { "Toms", 5 }, { "Room", 5 }, { "Hi Hat", 5 },
-            { "Keys", 6 }, { "Piano", 6 }, { "Synth Pad", 6 }, { "Lead Synth", 6 },
+            { "BGV 2", 1 }, { "Backing Vocals", 1 }, { "Harmony", 1 }, { "Vox Dbl", 1 }, { "BV L", 1 },
+            { "Rythm GTR1 R", 3 }, { "Rhythm Gtr L", 3 }, { "Guitar", 3 }, { "GTR DI", 3 }, { "Riff", 3 },
+            { "Lead Gtr", 2 }, { "Solo", 2 }, { "Guitar Solo", 2 },
+            { "Bass", 4 }, { "Bass DI", 4 }, { "Sub 808", 4 },
+            { "Kick", 5 }, { "Kick In", 5 }, { "BD", 5 }, { "Bass Drum", 5 },
+            { "Snare Top", 6 }, { "SN", 6 },
+            { "Drums", 7 }, { "OH L", 7 }, { "Toms", 7 }, { "Room", 7 }, { "Hi Hat", 7 },
+            { "Keys", 8 }, { "Piano", 8 }, { "Synth Pad", 8 }, { "Lead Synth", 8 },
             { "Audio 7", -1 }, { "Track 3", -1 }, { "", -1 }, { "Lead", -1 } };
         juce::StringArray bad;
         for (auto& [n, want] : cases) if (svt::roleFromName (n) != want) bad.add (juce::String (n) + " -> " + juce::String (svt::roleFromName (n)));
@@ -188,7 +188,7 @@ int main (int argc, char** argv)
     {
         float flat[svt::kBands];
         for (int k = 0; k < svt::kBands; ++k) flat[k] = svt::bandHz (k) < 140.0f ? -40.0f : (svt::bandHz (k) > 6000.0f ? -50.0f : 0.0f);
-        const auto lead = svt::decideCleanup (flat, 0), rhythm = svt::decideCleanup (flat, 1), bass = svt::decideCleanup (flat, 2);
+        const auto lead = svt::decideCleanup (flat, 0), rhythm = svt::decideCleanup (flat, 3), bass = svt::decideCleanup (flat, 4);
         check (lead.hpf >= 90.0f && lead.hpf <= 180.0f && lead.lpf > 19900.0f, "LEAD: high-pass from where it starts, no low-pass (" + juce::String (lead.hpf, 0) + " Hz)");
         check (rhythm.lpf >= 8000.0f && rhythm.lpf <= 12000.0f, "RHYTHM: low-pass above where the content ends (" + juce::String (rhythm.lpf, 0) + " Hz)");
         check (bass.hpf <= 45.0f && bass.lpf > 19900.0f, "BASS keeps its low end (" + juce::String (bass.hpf, 0) + " Hz)");
@@ -198,7 +198,7 @@ int main (int argc, char** argv)
 
     ServantProcessor proc;
     setP (proc, "match", 0);
-    setP (proc, "role", 1.0f);   // Rhythm
+    setP (proc, "role", 3.0f);   // Rhythm Guitar
 
     //==== 2) analysis on the test riff (The Master's RESET -> play -> PRESCRIBE)
     Riff riff (sr);
@@ -240,7 +240,7 @@ int main (int argc, char** argv)
     setP (proc, "role", 0.0f);   // Lead
     juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
     check (getP (proc, "lpf") > 19900.0f, "changing the ROLE re-decides the clean-up (a lead gets no low-pass)");
-    setP (proc, "role", 1.0f);
+    setP (proc, "role", 3.0f);
     juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
     check (getP (proc, "lpf") < 19900.0f, "...and back for a rhythm part");
 
@@ -372,7 +372,7 @@ int main (int argc, char** argv)
         check (top == 3 && bm.outSeconds.load() > 2.5, juce::String::formatted ("band meter: 330 Hz reads in the 250-500 Hz band (band %d, %.1f s)", top, bm.outSeconds.load()));
 
         // over the link (The Master in "another plugin binary")
-        setP (q, "role", 1.0f);
+        setP (q, "role", 3.0f);
         auto other = cdlink::Node::createIsolatedForTesting();
         juce::var lastStatus, lastApplied;
         cdlink::Endpoint master ("master", [&] (const juce::var& m)
@@ -499,9 +499,9 @@ int main (int argc, char** argv)
     {
         ServantProcessor p;
         bool autoOk = true;
-        const int expect[10] = { 1, 3, 2, 0, 0, 0, 3, 3, 1, 1 };   // Lead Vocal, Rhythm Guitar, Bass, Kick, Snare, Drums, Keys, Other, Lead Guitar, Backing Vocals
+        const int expect[10] = { 1, 1, 1, 3, 2, 0, 0, 0, 3, 3 };   // Lead Vocal, Backing Vocals, Lead Guitar, Rhythm Guitar, Bass, Kick, Snare, Drums, Keys, Other
         for (int r = 0; r < 10; ++r) { setP (p, "role", (float) r); autoOk = autoOk && p.currentParams().compStyle == expect[r]; }
-        setP (p, "compStyle", 2); setP (p, "role", 3.0f);
+        setP (p, "compStyle", 2); setP (p, "role", 5.0f);
         check (autoOk && p.currentParams().compStyle == 1, "AUTO style by role (kick/snare/drums PUNCH, lead SMOOTH, bass TIGHT, the rest GLUE); a picked style wins");
         auto drum = [] (int64_t n, int)
         {

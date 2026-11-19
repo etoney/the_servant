@@ -130,7 +130,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayo
 
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "match", 1 }, "Match (Level-Matched Output)", true));
     // mix link (The Master sets these; you can too)
-    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "role", 1 }, "Role", roleNames(), 7));
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "role", 1 }, "Role", roleNames(), 9));
     p.push_back (std::make_unique<AudioParameterBool>  (ParameterID { "compOn", 1 }, "Compressor On", false));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "comp", 1 }, "Compressor", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, pctAttr));
     p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "compStyle", 1 }, "Compressor Style", StringArray { "Auto (by role)", "Punch", "Smooth", "Tight", "Glue" }, 0));
@@ -216,7 +216,7 @@ void ServantProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
 const juce::StringArray& ServantProcessor::roleNames()
 {
-    static const juce::StringArray r { "Lead Vocal", "Rhythm Guitar", "Bass", "Kick", "Snare", "Drums", "Keys / Pads", "Other", "Lead Guitar", "Backing Vocals" };
+    static const juce::StringArray r { "Lead Vocal", "Backing Vocals", "Lead Guitar", "Rhythm Guitar", "Bass", "Kick", "Snare", "Drums", "Keys / Pads", "Other" };
     return r;
 }
 
@@ -380,7 +380,7 @@ void ServantProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (! s.isValid()) return;
 
     const juce::String flags = s.getProperty ("userSet", "");
-    roleAuto = (bool) s.getProperty ("roleAuto", false);   // projects from before 0.8 keep the role you set
+    roleAuto = (bool) s.getProperty ("roleAuto", true);
     nameChanged = true;
     for (int i = 0; i < kNumFlags; ++i) userSet[(size_t) i] = flags.substring (i, i + 1) == "1";
 

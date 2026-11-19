@@ -786,7 +786,7 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     addAndMakeVisible (compOn);
     roleBox.addItem ("AUTO: from the track name", kRoleAutoId);
     roleBox.addSeparator();
-    for (int idx : svt::roleMenuOrder()) roleBox.addItem (ServantProcessor::roleNames()[idx], idx + 1);   // item id = parameter index + 1
+    for (int idx = 0; idx < svt::kNumRoles; ++idx) roleBox.addItem (ServantProcessor::roleNames()[idx], idx + 1);   // item id = parameter index + 1
     roleBox.setTooltip ("What this track is in the song. The Master balances the mix by it (the lead vocal and lead guitar stay on top, "
                         "backing vocals sit under the lead, kick and bass own the low end), and The Servant picks its clean-up by it. "
                         "It's set from the track's name (\"Lead Vox\", \"BGV\", \"Kick\", \"Rhythm Gtr\"...) until you pick one yourself; "

@@ -18,9 +18,7 @@ struct RoleProfile
     RoleProfile() { for (auto& t : tol) t = 3.0f; }
 };
 
-// ROLE order matches the "role" parameter. The first eight keep their places (saved projects store
-// the index): Lead became Lead Vocal and Rhythm became Rhythm Guitar; Lead Guitar and Backing Vocals
-// were added at the end. The menu shows them in a friendlier order (roleMenuOrder).
+// ROLE order = the "role" parameter = the menu: vocals, guitars, bass, drums, keys, other.
 struct RoleRules
 {
     const char* name;
@@ -33,23 +31,16 @@ inline const RoleRules& roleRules (int role)
 {
     static const RoleRules r[] = {
         { "Lead Vocal",  90.0f, 180.0f, 20000.0f, 20000.0f, 3.0f },
+        { "Backing Vocals", 100.0f, 200.0f, 20000.0f, 20000.0f, 3.0f },   // a little more low cut than the lead
+        { "Lead Guitar", 70.0f, 160.0f, 14000.0f, 10000.0f, 3.0f },       // keeps the low E; trims fizz above the notes
         { "Rhythm Guitar", 70.0f, 160.0f, 12000.0f,  8000.0f, 3.0f },
         { "Bass",        30.0f,  45.0f, 20000.0f, 20000.0f, 4.0f },
         { "Kick",        30.0f,  40.0f, 20000.0f, 20000.0f, 4.5f },
         { "Snare",       70.0f, 140.0f, 20000.0f, 20000.0f, 3.0f },
         { "Drums",       30.0f,  40.0f, 20000.0f, 20000.0f, 4.5f },
         { "Keys / Pads", 40.0f, 120.0f, 20000.0f, 20000.0f, 3.5f },
-        { "Other",       30.0f,  80.0f, 20000.0f, 20000.0f, 3.5f },
-        { "Lead Guitar", 70.0f, 160.0f, 14000.0f, 10000.0f, 3.0f },   // keeps the low E; trims fizz above the notes
-        { "Backing Vocals", 100.0f, 200.0f, 20000.0f, 20000.0f, 3.0f } };   // a little more low cut than the lead
+        { "Other",       30.0f,  80.0f, 20000.0f, 20000.0f, 3.5f } };
     return r[juce::jlimit (0, kNumRoles - 1, role)];
-}
-
-// the order the ROLE menu lists them in (parameter indices)
-inline const std::array<int, kNumRoles>& roleMenuOrder()
-{
-    static const std::array<int, kNumRoles> o { 0, 9, 8, 1, 2, 3, 4, 5, 6, 7 };   // vocals, guitars, bass, drums, keys, other
-    return o;
 }
 
 // ROLE from the DAW's track name ("Lead Vox", "BGV 2", "Kick In", "Rythm GTR1 L", "Bass DI", "OH L"...).
@@ -73,19 +64,19 @@ inline int roleFromName (const juce::String& raw)
     auto starts = [&] (std::initializer_list<const char*> pre) { for (auto& t : w) for (auto* x : pre) if (t.startsWith (x)) return true; return false; };
     const bool voice = has ({ "vox", "vocal", "vocals", "voc", "vo", "vx", "voice", "singer", "sing", "lv", "leadvox", "rap", "scream", "screams", "harmony", "harmonies", "harm", "choir", "adlib", "adlibs" }) || starts ({ "vocal", "vox" });
     if (has ({ "bv", "bvs", "bgv", "bgvs", "bkg", "bvox", "choir", "harmony", "harmonies", "harm", "adlib", "adlibs", "gang" })
-        || (voice && has ({ "backing", "back", "bk", "bg", "dbl", "double", "doubles", "oohs", "aahs" }))) return 9;
+        || (voice && has ({ "backing", "back", "bk", "bg", "dbl", "double", "doubles", "oohs", "aahs" }))) return 1;
     if (voice) return 0;
-    if (has ({ "kick", "kik", "kck", "bd", "kd" }) || (has ({ "bass" }) && has ({ "drum" }))) return 3;
-    if (has ({ "snare", "snr", "sn", "sd" })) return 4;
+    if (has ({ "kick", "kik", "kck", "bd", "kd" }) || (has ({ "bass" }) && has ({ "drum" }))) return 5;
+    if (has ({ "snare", "snr", "sn", "sd" })) return 6;
     if (has ({ "drum", "drums", "kit", "oh", "ohs", "overhead", "overheads", "room", "rooms", "tom", "toms", "hat", "hats", "hh", "hihat",
-              "cymbal", "cymbals", "ride", "crash", "perc", "percussion", "shaker", "tamb", "loop", "beat", "beats" })) return 5;
-    if (has ({ "bass", "bs", "bas", "sub", "808" })) return 2;
+              "cymbal", "cymbals", "ride", "crash", "perc", "percussion", "shaker", "tamb", "loop", "beat", "beats" })) return 7;
+    if (has ({ "bass", "bs", "bas", "sub", "808" })) return 4;
     const bool guitar = has ({ "gtr", "gtrs", "guitar", "guitars", "gt", "git", "gtar", "elec", "acoustic", "ac", "dist" }) || starts ({ "guitar" });
     const bool lead = has ({ "lead", "ld", "solo", "melody", "mel" });
-    if (guitar) return lead ? 8 : 1;
-    if (has ({ "keys", "key", "kb", "piano", "pno", "synth", "synths", "syn", "pad", "pads", "organ", "rhodes", "wurli", "strings", "str", "string", "mellotron" })) return 6;
-    if (has ({ "solo" })) return 8;                                                // "Solo": a guitar solo (a bare "Lead" could be a voice: left alone)
-    if (has ({ "rhythm", "rythm", "rhy", "rhyth", "riff", "chug", "chugs" })) return 1;
+    if (guitar) return lead ? 2 : 3;
+    if (has ({ "keys", "key", "kb", "piano", "pno", "synth", "synths", "syn", "pad", "pads", "organ", "rhodes", "wurli", "strings", "str", "string", "mellotron" })) return 8;
+    if (has ({ "solo" })) return 2;                                                // "Solo": a guitar solo (a bare "Lead" could be a voice: left alone)
+    if (has ({ "rhythm", "rythm", "rhy", "rhyth", "riff", "chug", "chugs" })) return 3;
     return -1;
 }
 
