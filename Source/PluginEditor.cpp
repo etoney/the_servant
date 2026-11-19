@@ -815,7 +815,6 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     linkLabel.setText ("Not linked. The Servant works with The Master: put The Master last on your master bus and use its MY PLUGINS mode.", juce::dontSendNotification);
     linkLabel.setColour (juce::Label::textColourId, pal::paintDim);
 
-    addAndMakeVisible (rebel);
     setSize (1060, 840);
     updateStatus();
     startTimerHz (30);
@@ -897,8 +896,7 @@ void ServantEditor::resized()
         placeKnob (*toneKnobs[i], { 688 + (i % 3) * 116, 462 + (i / 3) * 112, 112, 108 });
 
     plates.push_back ({ "MIX LINK  //  THE MASTER", { 16, 698, 250, 130 } });
-    linkLabel.setBounds (28, 726, 228, 72);
-    rebel.setBounds (28, 800, 112, 20);
+    linkLabel.setBounds (28, 726, 228, 96);
     plates.push_back ({ "DE-ESSER", { 276, 698, 260, 130 } });
     deessOn.setBounds (288, 728, 70, 30);
     deessGr.setBounds (288, 766, 70, 40);
@@ -971,9 +969,7 @@ void ServantEditor::timerCallback()
         auto& lk = proc.getLink();
         const auto track = proc.getTrackName();
         juce::String t;
-        if (lk.isRebel())
-            t = "REBEL: The Master keeps its hands off this track. It still hears it and balances the rest around it.";
-        else if (! lk.masterNearby())
+        if (! lk.masterNearby())
             t = "Not linked. The Servant works with The Master: put The Master last on your master bus and use its MY PLUGINS mode.";
         else
         {

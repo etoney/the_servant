@@ -1,5 +1,4 @@
 #include "PluginProcessor.h"
-#include "Rebel.h"
 #include "PluginEditor.h"
 
 #ifndef JucePlugin_VersionString
@@ -145,7 +144,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout ServantProcessor::createLayo
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "transAtk", 1 }, "Transient Attack", NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f, bipAttr));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "transSus", 1 }, "Transient Sustain", NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f, bipAttr));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "compare", 1 }, "Compare (Hear the Dry Track)", false));
-    p.push_back (cdrebel::makeParam());
     return { p.begin(), p.end() };
 }
 
@@ -281,7 +279,6 @@ void ServantProcessor::decideAndApply (bool applyToKnobs)
     // ...and the resonances inside that range (no tone moves: The Master decides those from the mix)
     analysis = svt::decide (ltas, ltasEnv, ltasRate, ltasFrames, roleProfile());
     if (! applyToKnobs) return;
-    if (link != nullptr && link->isRebel()) return;   // REBEL: measure, but leave every knob as you set it
 
     const float hpfOld = apvts.getRawParameterValue ("hpf")->load(), lpfOld = apvts.getRawParameterValue ("lpf")->load();
     applying = true;
