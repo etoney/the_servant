@@ -16,10 +16,22 @@ THE WORKFLOW (all from The Master)
   1. Put The Servant on every track you want balanced and check each one's
      ROLE (top right): Lead Vocal, Backing Vocals, Lead Guitar, Rhythm
      Guitar, Bass, Kick, Snare, Drums, Keys / Pads, Other.
-     ROLE sets itself from the track's name ("Lead Vox", "BGV", "Kick",
-     "Rhythm Gtr L", "Bass DI", "OH"...) while it's on AUTO. Pick a role
-     yourself to override it; "AUTO: from the track name" at the top of the
-     menu goes back to the name.
+     NAME YOUR TRACKS and The Servant sets the ROLE for you:
+       Lead Vox / Lead Vocal ............. Lead Vocal
+       Backing Vox / BG Vox .............. Backing Vocals
+       Lead Gtr / Lead Guitar ............ Lead Guitar
+       Rhythm Gtr / Rhythm Guitar ........ Rhythm Guitar
+       Bass, Kick, Snare ................. Bass, Kick, Snare
+       Drums, Tom, HiHat, Cymbal, Overheads  Drums
+       Keys, Piano, Synth, Organ, Pad .... Keys / Pads
+     Vocals need LEAD or BACKING (BG) in the name, guitars LEAD or RHYTHM:
+     "Vox 1" or "Gtr 2" alone stays OTHER. Anything else in the name is
+     fine: numbers, sides, extra words ("Lead Vox 2", "Rhythm_Gtr_L DI",
+     "LeadVox dbl", "02 Kick In").
+     The line under ROLE says where it came from: SET BY THE TRACK NAME,
+     PICKED BY YOU, or NAME IT ... OR PICK ONE when the name doesn't say.
+     Pick a role yourself to override the name; "Set by the track name" at
+     the top of the menu goes back to it.
   2. Put The Master last on the master bus. Each Servant links by itself.
   3. On The Master press RESET and play the whole song. Every Servant listens
      to its own track at the same time (it also starts listening by itself

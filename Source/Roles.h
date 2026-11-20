@@ -47,11 +47,17 @@ inline const RoleRules& roleRules (int role)
 // ROLE from the DAW's track name ("Lead Vox", "BGV 2", "Kick In", "Rythm GTR1 L", "Bass DI", "OH L"...).
 // -1 when the name says nothing about the part. Checked in this order: backing vocals before vocals,
 // kick before bass ("bass drum"), lead guitar before rhythm guitar.
-inline int roleFromNameWords (const juce::StringArray& w);
-
+// ROLE from the track name. The rule is strict, so a name sets the role only when it says so:
+//   vocals:  "Lead" + "Vox" / "Vocal(s)"      -> Lead Vocal
+//            "Backing" or "BG" + "Vox" / "Vocal(s)" -> Backing Vocals ("BG Vox", "BGVox")
+//   guitars: "Lead" + "Gtr" / "Guitar(s)"     -> Lead Guitar
+//            "Rhythm" + "Gtr" / "Guitar(s)"   -> Rhythm Guitar
+//   by the instrument's name: Kick, Snare, Drums (or Drum, Tom, Toms, Hihat, Hat, Cymbal, Overheads),
+//            Bass, Keys (or Piano, Synth, Organ, Pad, Pads)
+// Anything else in the name is fine: numbers, sides, extra words ("Lead Vox 2", "leadvox_dbl", "02 Kick In").
+// Any other name: -1 (the role stays OTHER until the track is named or a role is picked).
 inline int roleFromName (const juce::String& raw)
 {
-    // words: camelCase, letters/digits and punctuation split apart ("14_ElecGtr04DI" -> "elec gtr 04 di")
     juce::String n;
     juce::juce_wchar prev = 0;
     for (auto c : raw)
@@ -63,43 +69,21 @@ inline int roleFromName (const juce::String& raw)
         n << juce::CharacterFunctions::toLowerCase (c); prev = c;
     }
     juce::StringArray w; w.addTokens (n, " ", ""); w.removeEmptyStrings();
-    if (w.isEmpty()) return -1;
-    const int r = roleFromNameWords (w);
-    if (r >= 0) return r;
-    // run-together words ("drumsroom", "lvox", "bassgtr"): split out the part names and try again
-    static const char* stems[] = { "overhead", "backing", "cymbal", "guitar", "vocal", "snare", "drum", "kick", "bass", "synth", "piano",
-                                   "keys", "room", "vox", "gtr", "tom", "hat", "pad" };
-    juce::StringArray x;
-    for (auto t : w)
-    {
-        for (auto* st : stems)
-            if (t.length() > (int) std::strlen (st) && t.contains (st)) { t = t.replace (st, juce::String (" ") + st + " "); break; }
-        x.addTokens (t, " ", "");
-    }
-    x.removeEmptyStrings();
-    if (x.size() > w.size()) { if (x.contains ("l") && x.contains ("vox")) x.add ("lv"); if (x.contains ("b") && x.contains ("vox")) x.add ("bv"); return roleFromNameWords (x); }
-    return -1;
-}
-
-inline int roleFromNameWords (const juce::StringArray& w)
-{
     auto has = [&] (std::initializer_list<const char*> words) { for (auto* x : words) if (w.contains (x)) return true; return false; };
-    auto starts = [&] (std::initializer_list<const char*> pre) { for (auto& t : w) for (auto* x : pre) if (t.startsWith (x)) return true; return false; };
-    const bool voice = has ({ "vox", "vocal", "vocals", "voc", "vo", "vx", "voice", "singer", "sing", "lv", "lvox", "ldvox", "leadvox", "rap", "scream", "screams", "harmony", "harmonies", "harm", "choir", "adlib", "adlibs" }) || starts ({ "vocal", "vox" });
-    if (has ({ "bv", "bvs", "bgv", "bgvs", "bkg", "bvox", "choir", "harmony", "harmonies", "harm", "adlib", "adlibs", "gang" })
-        || (voice && has ({ "backing", "back", "bk", "bg", "dbl", "double", "doubles", "oohs", "aahs" }))) return 1;
-    if (voice) return 0;
-    if (has ({ "kick", "kik", "kck", "bd", "kd" }) || (has ({ "bass" }) && has ({ "drum" }))) return 5;
-    if (has ({ "snare", "snr", "sn", "sd" })) return 6;
-    if (has ({ "drum", "drums", "kit", "oh", "ohs", "overhead", "overheads", "room", "rooms", "tom", "toms", "hat", "hats", "hh", "hihat",
-              "cymbal", "cymbals", "ride", "crash", "perc", "percussion", "shaker", "tamb", "loop", "beat", "beats" })) return 7;
-    if (has ({ "bass", "bs", "bas", "sub", "808" })) return 4;
-    const bool guitar = has ({ "gtr", "gtrs", "guitar", "guitars", "gt", "git", "gtar", "elec", "acoustic", "ac", "dist" }) || starts ({ "guitar" });
-    const bool lead = has ({ "lead", "ld", "solo", "melody", "mel" });
-    if (guitar) return lead ? 2 : 3;
-    if (has ({ "keys", "key", "kb", "piano", "pno", "synth", "synths", "syn", "pad", "pads", "organ", "rhodes", "wurli", "strings", "str", "string", "mellotron" })) return 8;
-    if (has ({ "solo" })) return 2;                                                // "Solo": a guitar solo (a bare "Lead" could be a voice: left alone)
-    if (has ({ "rhythm", "rythm", "rhy", "rhyth", "riff", "chug", "chugs" })) return 3;
+    // the role words may sit anywhere in the name, with anything around them ("Lead Vox 2", "leadvox_dbl",
+    // "RhythmGtr-L"); short words that hide inside others ("bg", "tom", "hat", "pad") must stand alone
+    const auto flat = w.joinIntoString ("");
+    auto in = [&] (std::initializer_list<const char*> parts) { for (auto* x : parts) if (flat.contains (x)) return true; return false; };
+    const bool lead = in ({ "lead" }), rhythm = in ({ "rhythm" }), backing = in ({ "backing", "bgvox", "bgvocal" }) || has ({ "bg" });
+    const bool vocal = in ({ "vox", "vocal" }), guitar = in ({ "gtr", "guitar" });
+    if (vocal)  return lead ? 0 : (backing ? 1 : -1);
+    if (guitar && ! lead && ! rhythm && in ({ "bass" })) return 4;   // "Bass Gtr": the bass
+    if (guitar) return lead ? 2 : (rhythm ? 3 : -1);
+    if (in ({ "kick" })) return 5;
+    if (in ({ "snare" })) return 6;
+    if (in ({ "drum", "hihat", "cymbal", "overhead" }) || has ({ "tom", "toms", "hat", "hats" })) return 7;
+    if (in ({ "bass" })) return 4;
+    if (in ({ "keys", "piano", "synth", "organ" }) || has ({ "pad", "pads" })) return 8;
     return -1;
 }
 

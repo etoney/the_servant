@@ -2,7 +2,7 @@
 
 A free track assistant (VST3 / AU) by **Castle Danger Music Company**, run by **The Master** on the master bus.
 
-Put it on your tracks and set each one's **ROLE**. The Master's **RESET** starts every Servant listening; its **PRESCRIBE** makes each one decide, from its own track and role:
+Put it on your tracks and name each track for its **ROLE** ("Lead Vox", "BG Vox", "Rhythm Gtr", "Kick"...) so The Servant can set it, or pick the ROLE yourself. The Master's **RESET** starts every Servant listening; its **PRESCRIBE** makes each one decide, from its own track and role:
 
 - **CLEAN-UP:** high-pass from where the track's content starts (within the role's range); low-pass above the fizz on rhythm parts
 - **RESONANCE:** up to 12 frequencies that ring, ducked only while they ring (dynamic, 5 ms look-ahead)

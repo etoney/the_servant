@@ -137,18 +137,16 @@ int main (int argc, char** argv)
     //==== ROLE from the track name
     {
         const std::vector<std::pair<const char*, int>> cases {
-            { "Lead Vox", 0 }, { "Vocals", 0 }, { "LV", 0 }, { "Vox 1", 0 }, { "Scream", 0 },
-            { "BGV 2", 1 }, { "Backing Vocals", 1 }, { "Harmony", 1 }, { "Vox Dbl", 1 }, { "BV L", 1 },
-            { "Rythm GTR1 R", 3 }, { "Rhythm Gtr L", 3 }, { "Guitar", 3 }, { "GTR DI", 3 }, { "Riff", 3 },
-            { "Lead Gtr", 2 }, { "Solo", 2 }, { "Guitar Solo", 2 },
-            { "Bass", 4 }, { "Bass DI", 4 }, { "Sub 808", 4 },
-            { "Kick", 5 }, { "Kick In", 5 }, { "BD", 5 }, { "Bass Drum", 5 },
-            { "Snare Top", 6 }, { "SN", 6 },
-            { "Drums", 7 }, { "OH L", 7 }, { "Toms", 7 }, { "Room", 7 }, { "Hi Hat", 7 },
-            { "Keys", 8 }, { "Piano", 8 }, { "Synth Pad", 8 }, { "Lead Synth", 8 },
-            { "LVox02", 0 }, { "BVox07", 1 }, { "30_Vox05", 0 }, { "14_ElecGtr04DI", 3 }, { "02_SnareUp", 6 }, { "04_HiHat", 7 }, { "09_DrumsRoom", 7 },
-            { "07_ChinaCymbal", 7 }, { "08_Overheads", 7 }, { "01_Kick", 5 }, { "10_Bass", 4 }, { "25_Piano", 8 }, { "23_Synth3", 8 }, { "drumsroom", 7 },
-            { "Audio 7", -1 }, { "Track 3", -1 }, { "", -1 }, { "Lead", -1 } };
+            // the strict rule: vocals and guitars need LEAD / BACKING / RHYTHM in the name
+            { "Lead Vox", 0 }, { "LeadVox", 0 }, { "leadvox_dbl", 0 }, { "Lead Vox 2!", 0 }, { "rhythmgtr2", 3 }, { "Bass Gtr", 4 }, { "BassDrum", 7 }, { "Custom FX", -1 }, { "Bottom", -1 }, { "Lead Vocal", 0 }, { "LVox01", -1 }, { "Vocals", -1 }, { "Vox 1", -1 },
+            { "Backing Vox 2", 1 }, { "Backing Vocals", 1 }, { "BG Vox 3", 1 }, { "BGVox", 1 }, { "bg_vocals", 1 }, { "BVox12", -1 }, { "BGV 2", -1 }, { "Harmony", -1 },
+            { "Lead Gtr", 2 }, { "Lead Guitar Solo", 2 }, { "Rhythm Gtr L", 3 }, { "Rhythm_Guitar_R", 3 }, { "RhythmGtr2", 3 },
+            { "Gtr 1", -1 }, { "13_ElecGtr03DI", -1 }, { "Rythm GTR1 R", -1 }, { "Solo", -1 },
+            // other instruments by their name
+            { "01_Kick", 5 }, { "Kick In", 5 }, { "02_SnareUp", 6 }, { "Snare", 6 }, { "Drums", 7 }, { "05_Tom1", 7 }, { "04_HiHat", 7 },
+            { "08_Overheads", 7 }, { "07_ChinaCymbal", 7 }, { "10_Bass", 4 }, { "Bass DI", 4 }, { "25_Piano", 8 }, { "21_Synth1", 8 }, { "Keys", 8 },
+            { "Pads", 8 }, { "Organ", 8 },
+            { "Audio 7", -1 }, { "Track 3", -1 }, { "", -1 }, { "Lead", -1 }, { "Rhythm", -1 }, { "Backing", -1 } };
         juce::StringArray bad;
         for (auto& [n, want] : cases) if (svt::roleFromName (n) != want) bad.add (juce::String (n) + " -> " + juce::String (svt::roleFromName (n)));
         check (bad.isEmpty(), "ROLE from the track name (" + juce::String ((int) cases.size()) + " names)" + (bad.isEmpty() ? juce::String() : ": " + bad.joinIntoString (", ")));

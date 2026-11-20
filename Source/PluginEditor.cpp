@@ -506,7 +506,7 @@ void CurveDisplay::paint (juce::Graphics& g)
     {
         const auto track = proc.getTrackName();
         g.setColour (pal::hazard.withAlpha (0.8f)); g.setFont (ledFont (10.5f));
-        g.drawText ("ROLE: " + proc.getRoleName().toUpperCase() + (proc.isRoleAuto() ? " (AUTO)" : "") + (track.isNotEmpty() ? "  //  " + track.toUpperCase() : juce::String()),
+        g.drawText ("ROLE: " + proc.getRoleName().toUpperCase() + (proc.isRoleAuto() ? (proc.guessedRole() >= 0 ? " (FROM THE TRACK NAME)" : "") : " (YOUR PICK)") + (track.isNotEmpty() ? "  //  " + track.toUpperCase() : juce::String()),
                     juce::Rectangle<float> (p.getX() + 2.0f, p.getY() - 12.0f, p.getWidth() * 0.5f, 11.0f), juce::Justification::centredLeft);
     }
     const auto& a = proc.getAnalysis();
@@ -784,13 +784,14 @@ ServantEditor::ServantEditor (ServantProcessor& p)
     addAndMakeVisible (compRead);
     buttonAtts.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "compOn", compOn));
     addAndMakeVisible (compOn);
-    roleBox.addItem ("AUTO: from the track name", kRoleAutoId);
+    roleBox.addItem ("Set by the track name", kRoleAutoId);
     roleBox.addSeparator();
     for (int idx = 0; idx < svt::kNumRoles; ++idx) roleBox.addItem (ServantProcessor::roleNames()[idx], idx + 1);   // item id = parameter index + 1
     roleBox.setTooltip ("What this track is in the song. The Master balances the mix by it (the lead vocal and lead guitar stay on top, "
-                        "backing vocals sit under the lead, kick and bass own the low end), and The Servant picks its clean-up by it. "
-                        "It's set from the track's name (\"Lead Vox\", \"BGV\", \"Kick\", \"Rhythm Gtr\"...) until you pick one yourself; "
-                        "AUTO goes back to the name.");
+                        "backing vocals sit under the lead, kick and bass own the low end), and The Servant picks its clean-up by it.\n"
+                        "Name your tracks and The Servant sets it for you: \"Lead Vox\", \"Backing Vox\" or \"BG Vox\", \"Lead Gtr\", \"Rhythm Gtr\", "
+                        "\"Kick\", \"Snare\", \"Drums\", \"Bass\", \"Keys\". Vocals need LEAD or BACKING (BG) in the name, guitars LEAD or RHYTHM. "
+                        "Or pick a role here; \"Set by the track name\" goes back to the name.");
     roleAtt = std::make_unique<juce::ParameterAttachment> (*p.apvts.getParameter ("role"),
                                                            [this] (float v) { roleBox.setSelectedId (juce::roundToInt (v) + 1, juce::dontSendNotification); });
     roleBox.onChange = [this]
@@ -966,6 +967,7 @@ void ServantEditor::timerCallback()
     if (++linkTick >= 15)
     {
         linkTick = 0;
+        repaint (roleArea.withTrimmedTop (54));   // the line under ROLE follows the track name
         auto& lk = proc.getLink();
         const auto track = proc.getTrackName();
         juce::String t;
@@ -1224,8 +1226,6 @@ void ServantEditor::buildBackdrop()
 
     auto pl = tex::distressedText ("ROLE", 120, 16, tex::stencil (14.0f), pal::paint, juce::Justification::centredLeft, scale, 0.2f, 7, 0.15f);
     g.drawImage (pl, juce::Rectangle<float> ((float) roleArea.getX() + 2, (float) roleArea.getY() + 2, 120.0f, 16.0f));
-    auto rh = tex::distressedText ("WHAT THIS TRACK DOES IN THE SONG", 200, 12, tex::plainBold (8.5f), pal::paintDim, juce::Justification::centredLeft, scale, 0.15f, 8, 0.12f);
-    g.drawImage (rh, juce::Rectangle<float> ((float) roleArea.getX() + 2, (float) roleArea.getY() + 58, 200.0f, 12.0f));
 
     // the logo: THE SERVANT in rusty red, over a tarnished serving-tray rule
     {
@@ -1275,5 +1275,15 @@ void ServantEditor::paint (juce::Graphics& g)
         g.setColour (juce::Colours::black);
         g.setOpacity (0.65f); g.drawImage (logoImage, la.translated (2.5f, 3.5f));
         g.setOpacity (1.0f); g.drawImage (logoImage, la);
+    }
+    // under ROLE: where the role comes from, so it reads at a glance without opening the menu
+    {
+        const bool fromName = proc.isRoleAuto() && proc.guessedRole() >= 0;
+        const juce::String t = ! proc.isRoleAuto() ? "PICKED BY YOU"
+                             : fromName ? "SET BY THE TRACK NAME"
+                                        : "NAME IT (E.G. \"LEAD VOX\") OR PICK ONE";
+        g.setColour (fromName || ! proc.isRoleAuto() ? pal::paintDim : pal::hazard);
+        g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)).withExtraKerningFactor (0.1f));
+        g.drawText (t, juce::Rectangle<int> (roleArea.getX() + 2, roleArea.getY() + 57, roleArea.getWidth(), 14), juce::Justification::centredLeft, true);
     }
 }

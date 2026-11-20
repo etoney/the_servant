@@ -326,11 +326,12 @@ void ServantProcessor::timerCallback()
 {
     if (roleAuto.load() && nameChanged.exchange (false))
     {
-        const int g = guessedRole();
-        if (g >= 0 && g != (int) apvts.getRawParameterValue ("role")->load()) { settingRole = true; setParam ("role", (float) g); settingRole = false; }
+        int g = guessedRole();
+        if (g < 0) g = svt::kNumRoles - 1;   // a name that doesn't say what it is: OTHER
+        if (g != (int) apvts.getRawParameterValue ("role")->load()) { settingRole = true; setParam ("role", (float) g); settingRole = false; }
     }
     if (roleChanged.exchange (false) && ltasFrames > 0 && getStage() != Stage::listening) { decideAndApply (true); ++analysisVersion; }
-    // a new Servant starts listening by itself once it hears its track, so The Master's GO TO FIX can
+    // a new Servant starts listening by itself once it hears its track, so The Master's PRESCRIBE can
     // decide its clean-up even if it was added after RESET (it used to sit on its default high-pass)
     if (ltasFrames <= 0 && ! engine.analyzer.learning.load() && bandMeter.outSeconds.load() > 0.5) startAnalysis();
 }
