@@ -563,7 +563,7 @@ struct SibStats
 // NOISE: what this track does when nobody is playing it. Every second of the raw input (before The
 // Servant touches it) is checked: the quietest real (not digital-silence) seconds give the noise floor,
 // and a quiet second where 50 or 60 Hz and its harmonics stand out is hum. The Master reads this to put
-// BuzzKill on exactly the tracks that need it.
+// Dead Air on exactly the tracks that need it.
 class NoiseMeter
 {
 public:

@@ -8,7 +8,7 @@ project(SERVANT VERSION 0.9.1)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Same JUCE version as DREAD, Possessed, BuzzKill, Chop Shop and Dominatrix.
+# Same JUCE version as DREAD, Possessed, Dead Air, Cutthroat and Dominatrix.
 # (Pass -DJUCE_LOCAL_DIR=/path/to/JUCE to build against a local checkout.)
 if(JUCE_LOCAL_DIR)
     add_subdirectory(${JUCE_LOCAL_DIR} JUCE)

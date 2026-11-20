@@ -25,7 +25,7 @@ THE WORKFLOW (all from The Master)
      to its own track at the same time (it also starts listening by itself
      as soon as it hears its track). It also checks the track's quiet parts
      (count-ins, gaps, the ending) for 50/60 Hz hum and noise, so The Master
-     knows exactly which tracks need BuzzKill.
+     knows exactly which tracks need Dead Air.
   4. On The Master press GO TO FIX (it prescribes). Each Servant
      finishes listening and decides its own CLEAN-UP and RESONANCES from what
      its track plays and its ROLE. The Master then decides each track's TONE

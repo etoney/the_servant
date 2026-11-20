@@ -31,4 +31,4 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --target Servant_VST3
 ```
 
-Built with JUCE 8.0.15 (same as DREAD, Possessed, BuzzKill, Chop Shop and Dominatrix).
+Built with JUCE 8.0.15 (same as DREAD, Possessed, Dead Air, Cutthroat and Dominatrix).
